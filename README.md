@@ -43,10 +43,8 @@
 ### Steps to Install
 
 1. **Clone the Repository**:
-   ```bash
-   git clone https://github.com/[your-username]/ez-mode.git
+    git clone https://github.com/[your-username]/ez-mode.git
    cd ez-mode
-```
 
 1. **Load the Extension in Chrome**:
 - Open Chrome and go to `chrome://extensions/`.
@@ -191,3 +189,5 @@ This project is licensed under the MIT License - see the <LICENSE> file for deta
 For questions or support, please open an issue on GitHub or contact [Your Email or Social Handle].
 
 -----
+
+  
