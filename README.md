@@ -4,7 +4,8 @@
 
 **Ez Mode** is a browser extension designed to automate mining and swapping activities on [Pond0x](https://www.pond0x.com/). With version 4.2.0, this extension provides a seamless experience for users looking to optimize their mining and swapping operations with minimal manual intervention. Featuring a user-friendly control panel, detailed status tracking, and smart automation features, Ez Mode is your go-to tool for efficient Pond0x interactions.
 
--  **Wallet interation**: Note the extension does not connect to your wallet, and does not create any non native Pond0x signatures or touch your private key or seed phrase. 
+-  **Wallet interation**: Note the extension does not connect to your wallet, and does not create any non native Pond0x signatures or touch your private key or seed phrase.
+-  **Full Automation**: Note as the extension does not interact with your wallet. You will require a autoclicker or pyautogui sciprt in order to confirm the Pond0x wallet signatures. 
 
 ## Features
 
