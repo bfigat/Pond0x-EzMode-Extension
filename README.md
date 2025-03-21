@@ -42,14 +42,24 @@
 
 ### Steps to Install
 
-1. **Clone the Repository**:
-    git clone https://github.com/[your-username]/ez-mode.git
-   cd ez-mode
+1. **Download Zipped Files**:
+    Press code button in github to download the files as a zip for ez-mode
 
 1. **Load the Extension in Chrome**:
 - Open Chrome and go to `chrome://extensions/`.
 - Enable “Developer mode” (toggle in the top-right corner).
 - Click “Load unpacked” and select the `ez-mode` folder you cloned.
+
+-Alternativley you can clone the repository
+
+**Clone the Repository**:
+    git clone https://github.com/[your-username]/ez-mode.git
+   cd ez-mode
+
+- Open Chrome and go to `chrome://extensions/`.
+- Enable “Developer mode” (toggle in the top-right corner).
+- Click “Load unpacked” and select the `ez-mode` folder you cloned.
+
 2. **Verify Installation**:
 - You should see the “Ez Mode” extension listed with the bear icon (as shown in the manifest: `icon48.png` and `icon128.png`).
 - The extension will automatically activate when you visit `https://www.pond0x.com/mining` or `https://www.pond0x.com/swap/solana`.
