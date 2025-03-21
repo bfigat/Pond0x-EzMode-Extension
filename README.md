@@ -112,6 +112,8 @@
 3. **Monitoring**:
 - The panel shows the number of completed swaps and a log of recent actions.
 
+***Note at present the autoswapper uses my refferal link***
+
 -----
 
 ## Permissions
@@ -182,16 +184,14 @@ Contributions are welcome! If you’d like to contribute:
 
 ## License
 
-This project is licensed under the MIT License - see the <LICENSE> file for details.
-
-*(Note: You’ll need to create a `LICENSE` file if you choose the MIT License or another license.)*
+This project is licensed under the Creative Common non commercial license. Feel free to use it but anything you create should be made available to everyone for free.
 
 -----
 
 ## Acknowledgements
 
 - Built with inspiration from the Pond0x community.
-- Thanks to the xAI team for creating Grok, which assisted in generating this README.
+- Thank you testers! 
 
 -----
 
