@@ -1,44 +1,47 @@
 {
-    "manifest_version": 3,
-    "name": "Ez Mode",
-    "version": "4.2.0",
-    "description": "Automates mining on Pond0x",
-    "permissions": [
-        "storage",
-        "notifications",
-        "tabs",
-        "activeTab",
-        "scripting"
-    ],
-    "host_permissions": [
-        "https://cary0x.github.io/status-mini/",
-        "https://www.pond0x.com/*",
-        "https://cary0x.github.io/docs/info/manifest"
-    ],
-    "background": {
-        "service_worker": "background.js",
-        "type": "module"
+  "manifest_version": 3,
+  "name": "Ez Mode",
+  "version": "4.2.0",
+  "description": "Automates mining on Pond0x",
+  "permissions": [
+    "storage",
+    "notifications",
+    "tabs",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://cary0x.github.io/status-mini/",
+    "https://www.pond0x.com/*",
+    "https://cary0x.github.io/docs/info/manifest"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://www.pond0x.com https://cary0x.github.io"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.pond0x.com/mining", "https://cary0x.github.io/status-mini/"],
+      "js": ["content_autominer.js"],
+      "run_at": "document_end"
     },
-    "content_scripts": [
-        {
-            "matches": ["https://www.pond0x.com/mining", "https://cary0x.github.io/status-mini/"],
-            "js": ["content_autominer.js"],
-            "run_at": "document_end"
-        },
-        {
-            "matches": ["https://www.pond0x.com/swap/solana*"],
-            "js": ["content_autoswapper.js"],
-            "run_at": "document_idle"
-        }
-    ],
-    "icons": {
-        "48": "icon48.png",
-        "128": "icon128.png"
-    },
-    "web_accessible_resources": [
-        {
-            "resources": ["icon.png"],
-            "matches": ["https://www.pond0x.com/*"]
-        }
-    ]
+    {
+      "matches": ["https://www.pond0x.com/swap/solana*"],
+      "js": ["content_autoswapper.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icon.png"],
+      "matches": ["https://www.pond0x.com/*"]
+    }
+  ]
 }

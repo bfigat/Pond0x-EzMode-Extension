@@ -11,17 +11,39 @@ setInterval(() => {
 // Store the ID of the status tab
 let statusTabId = null;
 
+// Sanitize strings to prevent injection in notifications
+const sanitizeString = (str) => {
+    return str.replace(/[<>&;]/g, '');
+};
+
+// Rate limiting for tab creation to prevent abuse
+let lastTabCreationTime = 0;
+const TAB_CREATION_COOLDOWN = 5000; // 5 seconds
+
 // Listen for messages from content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Validate message source to ensure it comes from a trusted origin
+    const allowedOrigins = [
+        'https://www.pond0x.com',
+        'https://cary0x.github.io'
+    ];
+    if (!sender.tab || !allowedOrigins.some(origin => sender.url.startsWith(origin))) {
+        console.error(`${lbh} - Unauthorized message from ${sender.url}`);
+        return;
+    }
+
     console.log(`${lbh} - Received message:`, message);
 
     if (message.type === 'notify') {
+        // Sanitize notification content to prevent injection
         console.log(`${lbh} - Received notification request: ${message.title} - ${message.body}`);
+        const title = sanitizeString(message.title);
+        const body = sanitizeString(message.body);
         chrome.notifications.create('', {
             type: 'basic',
             iconUrl: 'icon.png',
-            title: message.title,
-            message: message.body,
+            title: title,
+            message: body,
             priority: 1
         }, (notificationId) => {
             if (chrome.runtime.lastError) {
@@ -100,6 +122,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             console.warn(`${lbh} - No status tab to close (statusTabId is null)`);
         }
     } else if (message.action === 'openTab') {
+        // Rate limit tab creation to prevent abuse
+        const now = Date.now();
+        if (now - lastTabCreationTime < TAB_CREATION_COOLDOWN) {
+            console.warn(`${lbh} - Tab creation throttled`);
+            sendResponse(null);
+            return;
+        }
+        lastTabCreationTime = now;
         console.log(`${lbh} - Opening hidden tab for manifest scraping at ${message.url}`);
         chrome.tabs.create({ url: message.url, active: false }, (tab) => {
             if (chrome.runtime.lastError) {
@@ -120,9 +150,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const tabId = message.tabId;
         const walletAddress = message.walletAddress;
         const swapperTabId = sender.tab.id; // Capture the swapper tab ID
-        console.log(`${lbh} - Injecting script into manifest tab ${tabId} with wallet address ${walletAddress} for swapper tab ${swapperTabId}`);
+        console.log(`${lbh} - Injecting script into manifest tab ${tabId} with wallet address [Redacted] for swapper tab ${swapperTabId}`);
 
         function scrapeManifest(walletAddress, manifestTabId, swapperTabId) {
+            // Validate wallet address (should be a SHA-256 hash if hashing is used)
+            if (!walletAddress.match(/^[0-9a-f]{64}$/)) {
+                console.error('[Scrape] - Invalid wallet address format');
+                chrome.runtime.sendMessage({ action: 'scrapedSwaps', swaps: 'Error', tabId: manifestTabId });
+                return;
+            }
             const input = document.querySelector('input.fetchInput_Paim');
             if (!input) {
                 console.error('[Scrape] - Input field not found');
@@ -143,10 +179,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     console.error('[Scrape] - Submit button not found');
                     chrome.runtime.sendMessage({ action: 'scrapedSwaps', swaps: 'Error', tabId: manifestTabId });
                     return;
-                }
-                if (submitButton.disabled) {
-                    console.log('[Scrape] - Submit button is disabled, forcing enable');
-                    submitButton.disabled = false;
                 }
                 submitButton.click();
                 console.log('[Scrape] - Submit button clicked');
