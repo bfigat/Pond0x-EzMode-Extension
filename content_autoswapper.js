@@ -5,8 +5,6 @@
 
     console.log(`${lh} *** SWAP AUTOMATION RUNNING ***`);
 
-    // Define GM.setValue and GM.getValue using chrome.storage.local for native Chrome extension compatibility
-    // Note: GM object is defined in permissions.js with security enhancements (key validation, encryption)
     const GM = {
         getValue: (key, defaultValue) => {
             return new Promise((resolve) => {
@@ -33,73 +31,6 @@
             });
         }
     };
-
-    // Utility function to sanitize DOM-derived content
-    const sanitizeDomContent = (content) => {
-        if (typeof content !== 'string') return '';
-        // Allow only alphanumeric, spaces, colons, and basic punctuation
-        return content.replace(/[^a-zA-Z0-9\s:.-]/g, '');
-    };
-
-    // Utility function to sanitize user inputs
-    const sanitizeInput = (value) => {
-        const div = document.createElement('div');
-        div.textContent = value;
-        return div.innerHTML;
-    };
-
-    // Custom sanitization for wallet addresses (alphanumeric, 32-44 characters as per Solana wallet address spec)
-    const sanitizeWalletAddress = (address) => {
-        if (typeof address !== 'string') {
-            console.error(`${lh} - Wallet address must be a string`);
-            return '';
-        }
-        // Solana wallet addresses are base58 encoded, typically 32-44 characters
-        const sanitized = address.replace(/[^A-Za-z0-9]/g, '');
-        if (sanitized.length < 32 || sanitized.length > 44) {
-            console.error(`${lh} - Invalid wallet address length after sanitization: ${sanitized.length}`);
-            return '';
-        }
-        return sanitized;
-    };
-
-    // Hash wallet address to prevent leakage
-    const hashWalletAddress = async (address) => {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(address);
-        const hash = await crypto.subtle.digest('SHA-256', data);
-        return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
-    };
-
-    // Generate CSRF token
-    const generateCsrfToken = () => {
-        return Array.from(crypto.getRandomValues(new Uint8Array(16)))
-            .map(b => b.toString(16).padStart(2, '0'))
-            .join('');
-    };
-
-    // Store CSRF token in chrome.storage.local on script load
-    let csrfToken = null;
-    (async () => {
-        csrfToken = await GM.getValue('pond0xCsrfToken', null);
-        if (!csrfToken) {
-            csrfToken = generateCsrfToken();
-            await GM.setValue('pond0xCsrfToken', csrfToken);
-        }
-    })();
-
-    // Validate CSRF token
-    const validateCsrfToken = async (token) => {
-        const storedToken = await GM.getValue('pond0xCsrfToken', null);
-        return token === storedToken;
-    };
-
-    // Rotate CSRF token periodically
-    setInterval(async () => {
-        csrfToken = generateCsrfToken();
-        await GM.setValue('pond0xCsrfToken', csrfToken);
-        console.log(`${lh} - Rotated CSRF token`);
-    }, 30 * 60 * 1000); // Rotate every 30 minutes
 
     let swapAmount = await GM.getValue('pond0xSwapAmount', 0.01);
     let swapCounter = await GM.getValue('pond0xSwapCounter', 0);
@@ -142,8 +73,7 @@
         const errorText = document.body.innerText.toLowerCase();
         const isBlackScreen = document.body.style.backgroundColor === 'black' || document.body.style.backgroundColor === '#000000';
         const hasErrorMessage = errorText.includes('application error');
-        const hasContent = document.querySelector('div') !== null; // Ensure some content exists
-        return (hasErrorMessage || (isBlackScreen && errorText.trim().length < 50)) && !hasContent;
+        return hasErrorMessage || (isBlackScreen && errorText.trim().length < 50);
     };
 
     // Periodic crash detection
@@ -173,7 +103,7 @@
         const logWindow = document.getElementById('swapLogWindow');
         if (logWindow) {
             const currentTime = new Date().toLocaleTimeString();
-            logWindow.textContent = `${currentTime}: ${sanitizeDomContent(message)}\n${logWindow.textContent.split('\n')[0] || ''}`.trim();
+            logWindow.textContent = `${currentTime}: ${message}\n${logWindow.textContent.split('\n')[0] || ''}`.trim();
         }
     };
 
@@ -219,13 +149,11 @@
         }
     };
     if (hasReloaded) await restoreSwapMode();
-    // [Start of Part 2]
-    // Part 2 includes core functions: clickSwapDirectionButton, waitForPageReady, waitForSwapButton, fetchManifestSwaps
 
     async function clickSwapDirectionButton() {
         console.log(`${lh} - Attempting to click the swap direction button...`);
         const swapDirectionButton = document.querySelector('div.block svg.icons-sc-71agnn-0.KVxRw');
-        if (!swapDirectionButton || !swapDirectionButton.isConnected) {
+        if (!swapDirectionButton) {
             console.error(`${lh} - Swap direction button not found.`);
             notifyUser('Pond0x Error', 'Swap direction button not found.');
             updateLog('Direction button missing');
@@ -233,7 +161,7 @@
         }
 
         const parentDiv = swapDirectionButton.closest('div.block');
-        if (!parentDiv || !parentDiv.isConnected) {
+        if (!parentDiv) {
             console.error(`${lh} - Parent div for swap direction button not found.`);
             notifyUser('Pond0x Error', 'Parent div for swap direction button not found.');
             updateLog('Direction parent missing');
@@ -246,7 +174,6 @@
         await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for UI to update
         return true;
     }
-
     const waitForPageReady = () => {
         return new Promise((resolve) => {
             const maxWaitTime = 15000;
@@ -367,15 +294,8 @@
     };
 
     const fetchManifestSwaps = async (walletAddress) => {
-        return new Promise(async (resolve) => {
-            const sanitizedWalletAddress = sanitizeWalletAddress(walletAddress);
-            if (!sanitizedWalletAddress) {
-                console.error(`${lh} - Invalid wallet address after sanitization`);
-                resolve('Error');
-                return;
-            }
-            const hashedWalletAddress = await hashWalletAddress(sanitizedWalletAddress);
-            console.log(`${lh} - Opening hidden tab to fetch manifest swaps for [Hashed Wallet Address]`);
+        return new Promise((resolve) => {
+            console.log(`${lh} - Opening hidden tab to fetch manifest swaps for ${walletAddress}`);
             chrome.runtime.sendMessage({ action: 'openTab', url: 'https://cary0x.github.io/docs/info/manifest' }, (tabId) => {
                 if (!tabId) {
                     console.error(`${lh} - Failed to open hidden tab`);
@@ -386,7 +306,7 @@
                 chrome.runtime.sendMessage({
                     action: 'injectManifestScript',
                     tabId: tabId,
-                    walletAddress: hashedWalletAddress
+                    walletAddress: walletAddress
                 });
 
                 chrome.runtime.onMessage.addListener(function listener(message) {
@@ -399,8 +319,6 @@
             });
         });
     };
-    // [Start of Part 3]
-    // Part 3 includes the initializeControlPanel function
 
     async function initializeControlPanel() {
         const attachStartSwappingListener = (startSwappingBtn) => {
@@ -676,7 +594,6 @@
                     customSwapsBtn.disabled = false;
                 }
             });
-
             const rewardSwapsBtn = document.createElement('button');
             rewardSwapsBtn.id = 'rewardSwapsBtn';
             rewardSwapsBtn.textContent = 'Reward Swaps';
@@ -690,70 +607,70 @@
                 font-size: 12px;
             `;
             rewardSwapsBtn.addEventListener('click', async () => {
-                try {
-                    boostSwapsBtn.disabled = true;
-                    rewardSwapsBtn.disabled = true;
-                    customSwapsBtn.disabled = true;
-                    swapAmount = 9.02;
-                    swapMode = 'Reward';
-                    isRewardSwapsMode = true;
-                    await GM.setValue('pond0xSwapAmount', swapAmount);
-                    await GM.setValue('pond0xLastSwapAmount', swapAmount);
-                    await GM.setValue('pond0xSwapMode', swapMode);
-                    await GM.setValue('pond0xIsRewardSwapsMode', isRewardSwapsMode);
+    try {
+        boostSwapsBtn.disabled = true;
+        rewardSwapsBtn.disabled = true;
+        customSwapsBtn.disabled = true;
+        swapAmount = 9.02;
+        swapMode = 'Reward';
+        isRewardSwapsMode = true;
+        await GM.setValue('pond0xSwapAmount', swapAmount);
+        await GM.setValue('pond0xLastSwapAmount', swapAmount);
+        await GM.setValue('pond0xSwapMode', swapMode);
+        await GM.setValue('pond0xIsRewardSwapsMode', isRewardSwapsMode);
 
-                    // Force token pair to USDC (sell) and USDT (buy)
-                    selectedSellToken = 'USDC';
-                    selectedBuyToken = 'USDT';
-                    await GM.setValue('pond0xSelectedSellToken', selectedSellToken);
-                    await GM.setValue('pond0xSelectedBuyToken', selectedBuyToken);
+        // Force token pair to USDC (sell) and USDT (buy)
+        selectedSellToken = 'USDC';
+        selectedBuyToken = 'USDT';
+        await GM.setValue('pond0xSelectedSellToken', selectedSellToken);
+        await GM.setValue('pond0xSelectedBuyToken', selectedBuyToken);
 
-                    console.log(`${lh} - Reward Swaps activated. Amount set to 9.02 ${selectedSellToken}. Token pair locked to USDC -> USDT.`);
-                    updateLog(`Reward: 9.02 ${selectedSellToken} -> ${selectedBuyToken}`);
+        console.log(`${lh} - Reward Swaps activated. Amount set to 9.02 ${selectedSellToken}. Token pair locked to USDC -> USDT.`);
+        updateLog(`Reward: 9.02 ${selectedSellToken} -> ${selectedBuyToken}`);
 
-                    // Update the UI to reflect the locked token pair
-                    const sellTokenSelect = document.getElementById('sellTokenSelect');
-                    const buyTokenSelect = document.getElementById('buyTokenSelect');
-                    const updateTokenButton = document.getElementById('updateTokenButton');
-                    if (sellTokenSelect && buyTokenSelect && updateTokenButton) {
-                        sellTokenSelect.value = selectedSellToken;
-                        buyTokenSelect.value = selectedBuyToken;
-                        sellTokenSelect.disabled = true;
-                        buyTokenSelect.disabled = true;
-                        updateTokenButton.disabled = true;
-                    }
+        // Update the UI to reflect the locked token pair
+        const sellTokenSelect = document.getElementById('sellTokenSelect');
+        const buyTokenSelect = document.getElementById('buyTokenSelect');
+        const updateTokenButton = document.getElementById('updateTokenButton');
+        if (sellTokenSelect && buyTokenSelect && updateTokenButton) {
+            sellTokenSelect.value = selectedSellToken;
+            buyTokenSelect.value = selectedBuyToken;
+            sellTokenSelect.disabled = true;
+            buyTokenSelect.disabled = true;
+            updateTokenButton.disabled = true;
+        }
 
-                    // Immediately apply the token pair change to the swap site
-                    const tokenSetupSuccess = await setupTokensAndAmount(csrfToken);
-                    if (!tokenSetupSuccess) {
-                        console.error(`${lh} - Failed to set up token pair USDC -> USDT on the swap site after activating Reward Swaps mode.`);
-                        notifyUser('Pond0x Error', 'Failed to set token pair to USDC -> USDT on the swap site.');
-                        updateLog('Token setup failed');
-                    } else {
-                        console.log(`${lh} - Successfully set token pair to USDC -> USDT on the swap site.`);
-                        updateLog('Token pair set');
-                    }
+        // Immediately apply the token pair change to the swap site
+        const tokenSetupSuccess = await setupTokensAndAmount();
+        if (!tokenSetupSuccess) {
+            console.error(`${lh} - Failed to set up token pair USDC -> USDT on the swap site after activating Reward Swaps mode.`);
+            notifyUser('Pond0x Error', 'Failed to set token pair to USDC -> USDT on the swap site.');
+            updateLog('Token setup failed');
+        } else {
+            console.log(`${lh} - Successfully set token pair to USDC -> USDT on the swap site.`);
+            updateLog('Token pair set');
+        }
 
-                    const success = await updateAmountInput();
-                    if (!success) {
-                        console.error(`${lh} - Failed to update amount to 9.02 ${selectedSellToken}`);
-                        notifyUser('Pond0x Error', `Failed to set amount to 9.02 ${selectedSellToken}`);
-                        updateLog('Amount update failed');
-                    }
-                    rewardSwapsBtn.style.background = '#28a745';
-                    boostSwapsBtn.style.background = '#00CED1';
-                    customSwapsBtn.style.background = '#00CED1';
-                    reInjectControlPanel();
-                } catch (error) {
-                    console.error(`${lh} - Error updating amount:`, error);
-                    notifyUser('Pond0x Error', `Error updating amount: ${error.message}`);
-                    updateLog(`Error: ${error.message}`);
-                } finally {
-                    boostSwapsBtn.disabled = false;
-                    rewardSwapsBtn.disabled = false;
-                    customSwapsBtn.disabled = false;
-                }
-            });
+        const success = await updateAmountInput();
+        if (!success) {
+            console.error(`${lh} - Failed to update amount to 9.02 ${selectedSellToken}`);
+            notifyUser('Pond0x Error', `Failed to set amount to 9.02 ${selectedSellToken}`);
+            updateLog('Amount update failed');
+        }
+        rewardSwapsBtn.style.background = '#28a745';
+        boostSwapsBtn.style.background = '#00CED1';
+        customSwapsBtn.style.background = '#00CED1';
+        reInjectControlPanel();
+    } catch (error) {
+        console.error(`${lh} - Error updating amount:`, error);
+        notifyUser('Pond0x Error', `Error updating amount: ${error.message}`);
+        updateLog(`Error: ${error.message}`);
+    } finally {
+        boostSwapsBtn.disabled = false;
+        rewardSwapsBtn.disabled = false;
+        customSwapsBtn.disabled = false;
+    }
+});
 
             const customSwapsBtn = document.createElement('button');
             customSwapsBtn.id = 'customSwapsBtn';
@@ -785,7 +702,7 @@
                 margin-left: 5px;
             `;
             customSwapInput.addEventListener('change', async (e) => {
-                let value = parseFloat(sanitizeInput(e.target.value));
+                let value = parseFloat(e.target.value);
                 if (value < 0.001) value = 0.001;
                 if (value > 9999.999) value = 9999.999;
                 customSwapInput.value = value.toFixed(3);
@@ -943,8 +860,8 @@
                 font-size: 12px;
             `;
             updateTokenButton.addEventListener('click', async () => {
-                const sellValue = sanitizeInput(sellTokenSelect.value);
-                const buyValue = sanitizeInput(buyTokenSelect.value);
+                const sellValue = sellTokenSelect.value;
+                const buyValue = buyTokenSelect.value;
                 if (sellValue === buyValue) {
                     console.warn(`${lh} - Cannot update: Sell and Buy tokens cannot be the same (${sellValue}).`);
                     notifyUser('Pond0x Warning', 'Sell and Buy tokens cannot be the same.');
@@ -957,7 +874,7 @@
                 console.log(`${lh} - Tokens updated: Sell=${selectedSellToken}, Buy=${selectedBuyToken}`);
                 updateLog(`Tokens updated: Sell=${selectedSellToken}, Buy=${selectedBuyToken}`);
                 notifyUser('Pond0x Info', `Tokens updated to Sell=${selectedSellToken}, Buy=${selectedBuyToken}`);
-                await setupTokensAndAmount(csrfToken);
+                await setupTokensAndAmount();
             });
 
             const tokenKeys = Object.keys(TOKEN_CONFIG);
@@ -976,7 +893,7 @@
             });
 
             sellTokenSelect.addEventListener('change', (e) => {
-                const sellValue = sanitizeInput(e.target.value);
+                const sellValue = e.target.value;
                 if (sellValue === buyTokenSelect.value) {
                     const availableTokens = tokenKeys.filter(t => t !== sellValue);
                     const newBuyToken = availableTokens[0] || tokenKeys[0];
@@ -990,7 +907,7 @@
             });
 
             buyTokenSelect.addEventListener('change', (e) => {
-                const buyValue = sanitizeInput(e.target.value);
+                const buyValue = e.target.value;
                 if (buyValue === sellTokenSelect.value) {
                     const availableTokens = tokenKeys.filter(t => t !== buyValue);
                     const newSellToken = availableTokens[0] || tokenKeys[0];
@@ -1044,7 +961,7 @@
                 padding: 2px 5px;
             `;
             retryIntervalInput.addEventListener('change', async (e) => {
-                retryInterval = parseInt(sanitizeInput(e.target.value)) * 1000 || 3000;
+                retryInterval = parseInt(e.target.value) * 1000 || 3000;
                 await GM.setValue('pond0xRetryInterval', retryInterval);
                 console.log(`${lh} - Swap frequency updated to ${retryInterval / 1000} seconds.`);
                 updateLog(`Freq: ${retryInterval / 1000}s`);
@@ -1107,10 +1024,10 @@
                 padding: 2px 5px;
             `;
             walletInput.addEventListener('change', async (e) => {
-                const walletAddress = sanitizeInput(e.target.value.trim());
+                const walletAddress = e.target.value.trim();
                 if (walletAddress.length >= 32 && walletAddress.length <= 44) {
                     updateLog('Fetching swaps');
-                    console.log(`${lh} - Fetching swaps for wallet: [Redacted]`);
+                    console.log(`${lh} - Fetching swaps for wallet: ${walletAddress}`);
                     const swaps = await fetchManifestSwaps(walletAddress);
                     console.log(`${lh} - Fetched swaps value: ${swaps}`);
                     const manifestSwapsElement = document.getElementById('manifestSwaps');
@@ -1270,54 +1187,69 @@
             if (logWindow) logWindow.textContent = 'Control panel updated';
         }
     }
-    // [Start of Part 4]
-    // Part 4 includes token and amount setup functions: updateAmountInput, setupTokensAndAmount
 
     async function updateAmountInput() {
+        console.log(`${lh} - Starting updateAmountInput...`);
+        const amountInput = document.querySelector('input[placeholder="0.00"]');
+        if (!amountInput) {
+            console.error(`${lh} - Amount input not found.`);
+            notifyUser('Pond0x Warning', 'Amount input not found.');
+            updateLog('Input not found');
+            return false;
+        }
+
         console.log(`${lh} - Updating amount input to ${swapAmount} ${selectedSellToken}...`);
-        const amountInput = document.querySelector('input[placeholder="0.0"]');
-        if (!amountInput || !amountInput.isConnected) {
-            console.error(`${lh} - Amount input field not found.`);
-            notifyUser('Pond0x Error', 'Amount input field not found.');
-            updateLog('Amount input missing');
-            return false;
-        }
+        updateLog(`Set: ${swapAmount}`);
 
-        try {
-            amountInput.focus();
-            amountInput.value = swapAmount.toString();
-            amountInput.dispatchEvent(new Event('focus', { bubbles: true }));
-            amountInput.dispatchEvent(new Event('input', { bubbles: true }));
-            amountInput.dispatchEvent(new Event('change', { bubbles: true }));
-            amountInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' }));
-            console.log(`${lh} - Amount input updated to ${swapAmount} ${selectedSellToken}`);
-            updateLog(`Amount set: ${swapAmount}`);
+        const setAmount = async () => {
+            try {
+                amountInput.focus();
+                amountInput.value = '';
+                await new Promise(resolve => setTimeout(resolve, 100));
+                amountInput.value = swapAmount.toString();
+
+                const inputEvent = new Event('input', { bubbles: true });
+                amountInput.dispatchEvent(inputEvent);
+                const changeEvent = new Event('change', { bubbles: true });
+                amountInput.dispatchEvent(changeEvent);
+                amountInput.blur();
+
+                await new Promise(resolve => setTimeout(resolve, 500));
+                if (amountInput.value !== swapAmount.toString()) {
+                    console.warn(`${lh} - Amount input update failed. Retrying...`);
+                    return false;
+                }
+                console.log(`${lh} - Amount verified as ${swapAmount} after update.`);
+                updateLog(`Verified: ${swapAmount}`);
+                return true;
+            } catch (e) {
+                console.error(`${lh} - Error setting amount:`, e);
+                return false;
+            }
+        };
+
+        let attempts = 0;
+        const maxAttempts = 3;
+        while (attempts < maxAttempts) {
+            const success = await setAmount();
+            if (success) return true;
+            attempts++;
+            console.log(`${lh} - Attempt ${attempts}/${maxAttempts} failed. Retrying after delay...`);
+            updateLog(`Retry ${attempts} failed`);
             await new Promise(resolve => setTimeout(resolve, 1000));
-            return true;
-        } catch (error) {
-            console.error(`${lh} - Error updating amount input:`, error);
-            notifyUser('Pond0x Error', `Error updating amount: ${error.message}`);
-            updateLog(`Amount update error: ${error.message}`);
-            return false;
         }
-    }
 
-    async function setupTokensAndAmount(csrfTokenParam) {
+        console.error(`${lh} - Failed to update amount after ${maxAttempts} attempts. Final value: ${amountInput.value}`);
+        notifyUser('Pond0x Error', 'Failed to update swap amount after multiple attempts.');
+        updateLog('Amount update failed');
+        return false;
+    }
+    async function setupTokensAndAmount() {
         console.log(`${lh} - Starting setupTokensAndAmount...`);
         if (isSettingUp) {
             console.log(`${lh} - Setup already in progress, skipping duplicate execution...`);
             return false;
         }
-
-        // Validate CSRF token
-        const isValidToken = await validateCsrfToken(csrfTokenParam);
-        if (!isValidToken) {
-            console.error(`${lh} - Invalid CSRF token. Aborting setup.`);
-            notifyUser('Pond0x Error', 'Invalid CSRF token. Setup aborted.');
-            updateLog('CSRF validation failed');
-            return false;
-        }
-
         isSettingUp = true;
         console.log(`${lh} - Setting up token pair and amount...`);
         updateLog('Setting up');
@@ -1325,304 +1257,835 @@
         const sellToken = TOKEN_CONFIG[selectedSellToken];
         const buyToken = TOKEN_CONFIG[selectedBuyToken];
 
-        if (!sellToken || !buyToken) {
-            console.error(`${lh} - Invalid token configuration: Sell=${selectedSellToken}, Buy=${selectedBuyToken}`);
-            notifyUser('Pond0x Error', 'Invalid token configuration.');
-            updateLog('Invalid tokens');
-            isSettingUp = false;
-            return false;
+        console.log(`${lh} - Waiting for DOM stability before token setup...`);
+        try {
+            await new Promise((resolve) => {
+                let lastMutationTime = Date.now();
+                const stabilityThreshold = 500;
+                const maxWaitTime = 2000;
+                const observer = new MutationObserver(() => {
+                    console.log(`${lh} - DOM mutation detected at ${Date.now() - lastMutationTime}ms since last mutation.`);
+                    lastMutationTime = Date.now();
+                });
+
+                const checkDropdownReadiness = () => {
+                    const buyDropdown = document.querySelectorAll('button.rounded-full.flex.items-center')[1];
+                    return buyDropdown && buyDropdown.offsetWidth > 0 && buyDropdown.offsetHeight > 0;
+                };
+
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true
+                });
+
+                const checkStability = () => {
+                    const timeSinceLastMutation = Date.now() - lastMutationTime;
+                    const totalElapsed = Date.now() - (lastMutationTime - stabilityThreshold);
+                    console.log(`${lh} - Checking stability: timeSinceLastMutation=${timeSinceLastMutation}ms, totalElapsed=${totalElapsed}ms, buyDropdownReady=${checkDropdownReadiness()}`);
+                    if ((timeSinceLastMutation >= stabilityThreshold || totalElapsed >= maxWaitTime) && checkDropdownReadiness()) {
+                        observer.disconnect();
+                        console.log(`${lh} - DOM stability achieved or timeout reached after ${totalElapsed}ms.`);
+                        resolve();
+                    } else {
+                        setTimeout(checkStability, 500);
+                    }
+                };
+
+                setTimeout(checkStability, 500);
+                setTimeout(() => {
+                    observer.disconnect();
+                    console.warn(`${lh} - DOM stability check timed out after ${maxWaitTime}ms. Proceeding with token setup.`);
+                    resolve();
+                }, maxWaitTime);
+            });
+        } catch (error) {
+            console.error(`${lh} - Error in waitForDOMStability:`, error);
+            notifyUser('Pond0x Warning', `Error stabilizing DOM: ${error.message}. Proceeding anyway.`);
+            updateLog(`DOM error`);
         }
-
-        const selectTokenOption = async (tokenName, isSellToken = true, maxAttempts = 5, delay = 1000) => {
-            console.log(`${lh} - Starting selectTokenOption for ${tokenName} (isSellToken: ${isSellToken})...`);
-            let attempts = 0;
-            const normalizedTokenName = tokenName.toUpperCase();
-            const tokenConfig = TOKEN_CONFIG[normalizedTokenName];
-            if (!tokenConfig || !tokenConfig.address.match(/^[A-Za-z0-9]+$/)) {
-                console.error(`${lh} - Invalid token configuration for ${tokenName}`);
-                notifyUser('Pond0x Error', `Invalid token configuration for ${tokenName}`);
-                updateLog(`No config: ${tokenName}`);
-                return false;
-            }
-
-            while (attempts < maxAttempts) {
-                try {
-                    const dropdowns = document.querySelectorAll('button.rounded-full.flex.items-center');
-                    if (dropdowns.length < 2) {
-                        console.warn(`${lh} - Token dropdowns not found (attempt ${attempts + 1}/${maxAttempts})`);
-                        attempts++;
-                        await new Promise(resolve => setTimeout(resolve, delay));
-                        continue;
-                    }
-
-                    const dropdown = dropdowns[isSellToken ? 0 : 1];
-                    if (!dropdown || !dropdown.isConnected) {
-                        console.warn(`${lh} - ${isSellToken ? 'Sell' : 'Buy'} token dropdown not found (attempt ${attempts + 1}/${maxAttempts})`);
-                        attempts++;
-                        await new Promise(resolve => setTimeout(resolve, delay));
-                        continue;
-                    }
-
-                    dropdown.click();
-                    console.log(`${lh} - Clicked ${isSellToken ? 'sell' : 'buy'} token dropdown`);
-                    await new Promise(resolve => setTimeout(resolve, 500));
-
-                    let tokenOption = null;
-                    if (tokenConfig.selector) {
-                        tokenOption = document.querySelector(tokenConfig.selector);
-                    } else if (tokenConfig.descriptionSelector && tokenConfig.descriptionText) {
-                        const options = document.querySelectorAll(tokenConfig.descriptionSelector);
-                        tokenOption = Array.from(options).find(option => option.textContent.trim() === tokenConfig.descriptionText);
-                    }
-
-                    if (!tokenOption || !tokenOption.isConnected) {
-                        console.warn(`${lh} - ${tokenName} option not found (attempt ${attempts + 1}/${maxAttempts})`);
-                        attempts++;
-                        await new Promise(resolve => setTimeout(resolve, delay));
-                        continue;
-                    }
-
-                    tokenOption.click();
-                    console.log(`${lh} - Selected ${tokenName} as ${isSellToken ? 'sell' : 'buy'} token`);
-                    updateLog(`${isSellToken ? 'Sell' : 'Buy'} token: ${tokenName}`);
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    return true;
-                } catch (error) {
-                    console.error(`${lh} - Error selecting ${tokenName} (attempt ${attempts + 1}/${maxAttempts}):`, error);
-                    attempts++;
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                }
-            }
-
-            console.error(`${lh} - Failed to select ${tokenName} after ${maxAttempts} attempts`);
-            notifyUser('Pond0x Error', `Failed to select ${tokenName}`);
-            updateLog(`Failed: ${tokenName}`);
-            return false;
-        };
 
         try {
-            const sellSuccess = await selectTokenOption(selectedSellToken, true);
-            if (!sellSuccess) {
-                console.error(`${lh} - Failed to select sell token ${selectedSellToken}`);
+            const sellDropdown = document.querySelectorAll('button.rounded-full.flex.items-center')[0];
+            if (!sellDropdown) {
+                console.error(`${lh} - Top dropdown not found.`);
+                notifyUser('Pond0x Warning', 'Sell dropdown not found.');
+                updateLog('Sell dropdown missing');
+                isSettingUp = false;
+                return false;
+            }
+            console.log(`${lh} - Clicking top dropdown for ${sellToken.name}...`);
+            updateLog(`Sell: ${sellToken.name}`);
+            sellDropdown.click();
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const searchBar = document.querySelector('input[placeholder="Search"]');
+            if (!searchBar) {
+                console.error(`${lh} - Search bar not found for ${sellToken.name}.`);
+                notifyUser('Pond0x Warning', `Search bar not found for ${sellToken.name}.`);
+                updateLog('Search bar missing');
+                isSettingUp = false;
+                return false;
+            }
+            console.log(`${lh} - Found search bar, inputting ${sellToken.name} address...`);
+            searchBar.value = sellToken.address;
+            searchBar.dispatchEvent(new Event('input', { bubbles: true }));
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const selectTokenOption = async (tokenName, isSellToken = true, maxAttempts = 5, delay = 1000) => {
+                console.log(`${lh} - Starting selectTokenOption for ${tokenName} (isSellToken: ${isSellToken})...`);
+                let attempts = 0;
+                const normalizedTokenName = tokenName.toUpperCase();
+                const tokenConfig = TOKEN_CONFIG[normalizedTokenName];
+                if (!tokenConfig) {
+                    console.error(`${lh} - Token configuration for ${tokenName} not found in TOKEN_CONFIG.`);
+                    notifyUser('Pond0x Error', `Token configuration for ${tokenName} not found.`);
+                    updateLog(`No config: ${tokenName}`);
+                    return false;
+                }
+
+                while (attempts < maxAttempts) {
+                    let tokenOption;
+                    if (tokenName.toLowerCase() === 'wpond' && tokenConfig.descriptionSelector && tokenConfig.descriptionText) {
+                        const descriptionElements = document.querySelectorAll(`div[class*="flex"][class*="items-center"] ${tokenConfig.descriptionSelector}`);
+                        tokenOption = Array.from(descriptionElements).find(el => el.textContent.trim() === tokenConfig.descriptionText)?.closest('div[class*="flex"][class*="items-center"]');
+                        if (!tokenOption) {
+                            console.warn(`${lh} - wPOND description selector not found.`);
+                            return false;
+                        }
+                    } else if (tokenConfig.selector) {
+                        tokenOption = document.querySelector(`div[class*="flex"][class*="items-center"] ${tokenConfig.selector}`)?.closest('div[class*="flex"][class*="items-center"]');
+                    }
+                    if (tokenOption) {
+                        console.log(`${lh} - Found ${tokenName} option in DOM:`, tokenOption.outerHTML);
+                        const clickableButton = tokenOption.querySelector('button') || tokenOption;
+                        if (clickableButton) {
+                            const dropdown = isSellToken ? sellDropdown : document.querySelectorAll('button.rounded-full.flex.items-center')[1];
+                            if (dropdown) {
+                                dropdown.focus();
+                                await new Promise(resolve => setTimeout(resolve, 500));
+                                dropdown.blur();
+                            }
+                            clickableButton.focus();
+                            const mousedownEvent = new Event('mousedown', { bubbles: true });
+                            const mouseupEvent = new Event('mouseup', { bubbles: true });
+                            const clickEvent = new Event('click', { bubbles: true });
+                            clickableButton.dispatchEvent(mousedownEvent);
+                            clickableButton.dispatchEvent(mouseupEvent);
+                            clickableButton.dispatchEvent(clickEvent);
+                            await new Promise(resolve => setTimeout(resolve, 2000));
+                            const verifySelection = () => {
+                                return new Promise((resolve) => {
+                                    let verifyAttempts = 0;
+                                    const maxVerifyAttempts = 5;
+                                    const check = () => {
+                                        const selectedToken = document.querySelector(`button.rounded-full.flex.items-center ${tokenConfig.selector || `img[alt="${tokenName}"]`}`);
+                                        const dropdownButton = isSellToken ? 
+                                            document.querySelectorAll('button.rounded-full.flex.items-center')[0] : 
+                                            document.querySelectorAll('button.rounded-full.flex.items-center')[1];
+                                        const isVisuallySelected = dropdownButton && (dropdownButton.innerHTML.includes(tokenName) || dropdownButton.innerHTML.includes(tokenConfig.descriptionText || tokenName));
+                                        if ((selectedToken && isVisuallySelected) || verifyAttempts >= maxVerifyAttempts) {
+                                            resolve(selectedToken !== null && isVisuallySelected);
+                                        } else {
+                                            verifyAttempts++;
+                                            setTimeout(check, 500);
+                                        }
+                                    };
+                                    check();
+                                });
+                            };
+                            const isSelected = await verifySelection();
+                            if (isSelected) {
+                                console.log(`${lh} - Successfully selected ${tokenName} after click.`);
+                                updateLog(`${tokenName} selected`);
+                                return true;
+                            } else {
+                                console.warn(`${lh} - ${tokenName} click did not result in selection, retrying...`);
+                                if (!isSellToken) {
+                                    const buyDropdown = document.querySelectorAll('button.rounded-full.flex.items-center')[1];
+                                    if (buyDropdown) {
+                                        console.log(`${lh} - Re-opening Buy dropdown to retry ${tokenName} selection...`);
+                                        buyDropdown.click();
+                                        await new Promise(resolve => setTimeout(resolve, 1000));
+                                        const searchBarRetry = document.querySelector('input[placeholder="Search"]');
+                                        if (searchBarRetry) {
+                                            searchBarRetry.value = tokenConfig.address;
+                                            searchBarRetry.dispatchEvent(new Event('input', { bubbles: true }));
+                                            await new Promise(resolve => setTimeout(resolve, 1000));
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            console.warn(`${lh} - No clickable button found for ${tokenName}, retrying...`);
+                        }
+                    } else {
+                        console.warn(`${lh} - ${tokenName} option not found (attempt ${attempts + 1}/${maxAttempts}). Retrying...`);
+                    }
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    attempts++;
+                }
+                console.error(`${lh} - Failed to find or select ${tokenName} option after ${maxAttempts} attempts.`);
+                notifyUser('Pond0x Warning', `${tokenName} option not found or not selectable after multiple attempts.`);
+                updateLog(`Failed: ${tokenName}`);
+                return false;
+            };
+
+            console.log(`${lh} - Setting up Sell token ${sellToken.name}...`);
+            if (!(await selectTokenOption(sellToken.name, true))) {
+                console.error(`${lh} - Failed to set up Sell token ${sellToken.name}.`);
+                isSettingUp = false;
+                return false;
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            let buyDropdown;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                buyDropdown = document.querySelectorAll('button.rounded-full.flex.items-center')[1];
+                if (buyDropdown && buyDropdown.offsetWidth > 0 && buyDropdown.offsetHeight > 0) {
+                    console.log(`${lh} - Buy dropdown found on attempt ${attempt + 1}.`);
+                    break;
+                }
+                console.warn(`${lh} - Buy dropdown not ready, retrying... (attempt ${attempt + 1}/3)`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            if (!buyDropdown) {
+                console.error(`${lh} - Bottom dropdown not found after retries.`);
+                notifyUser('Pond0x Warning', 'Buy dropdown not found after retries.');
+                updateLog('Buy dropdown missing');
+                isSettingUp = false;
+                return false;
+            }
+            console.log(`${lh} - Clicking bottom dropdown for ${buyToken.name}...`);
+            updateLog(`Buy: ${buyToken.name}`);
+            buyDropdown.click();
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const searchBarBuy = document.querySelector('input[placeholder="Search"]');
+            if (!searchBarBuy) {
+                console.error(`${lh} - Search bar not found for ${buyToken.name}.`);
+                notifyUser('Pond0x Warning', `Search bar not found for ${buyToken.name}.`);
+                updateLog('Search bar missing');
+                isSettingUp = false;
+                return false;
+            }
+            console.log(`${lh} - Found search bar, inputting ${buyToken.name} address...`);
+            searchBarBuy.value = buyToken.address;
+            searchBarBuy.dispatchEvent(new Event('input', { bubbles: true }));
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            let buySelectionSuccess = false;
+            for (let retry = 0; retry < 4; retry++) {
+                console.log(`${lh} - Attempt ${retry + 1} to select Buy token ${buyToken.name}...`);
+                if (await selectTokenOption(buyToken.name, false)) {
+                    buySelectionSuccess = true;
+                    break;
+                }
+                console.warn(`${lh} - Buy token ${buyToken.name} selection failed on attempt ${retry + 1}, retrying...`);
+                await new Promise(resolve => setTimeout(resolve, 2000 + (retry * 1000)));
+                buyDropdown.click();
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                if (searchBarBuy) {
+                    searchBarBuy.value = buyToken.address;
+                    searchBarBuy.dispatchEvent(new Event('input', { bubbles: true }));
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+            if (!buySelectionSuccess) {
+                console.error(`${lh} - Failed to select Buy token ${buyToken.name} after multiple retries.`);
+                notifyUser('Pond0x Warning', `Failed to select Buy token ${buyToken.name} after multiple retries.`);
+                updateLog(`Failed: ${buyToken.name}`);
                 isSettingUp = false;
                 return false;
             }
 
-            const buySuccess = await selectTokenOption(selectedBuyToken, false);
-            if (!buySuccess) {
-                console.error(`${lh} - Failed to select buy token ${selectedBuyToken}`);
+            const selectedBuy = document.querySelector(`button.rounded-full.flex.items-center ${buyToken.selector || `img[alt="${buyToken.name}"]`}`);
+            if (!selectedBuy) {
+                console.error(`${lh} - ${buyToken.name} not confirmed as selected after click.`);
+                notifyUser('Pond0x Warning', `${buyToken.name} not confirmed as selected.`);
+                updateLog(`${buyToken.name} not confirmed`);
                 isSettingUp = false;
                 return false;
             }
-
-            const amountSuccess = await updateAmountInput();
-            if (!amountSuccess) {
-                console.error(`${lh} - Failed to update amount to ${swapAmount} ${selectedSellToken}`);
-                isSettingUp = false;
-                return false;
-            }
-
-            console.log(`${lh} - Successfully set up tokens and amount: Sell=${selectedSellToken}, Buy=${selectedBuyToken}, Amount=${swapAmount}`);
-            updateLog('Setup complete');
-            setupRetryCount = 0;
+            console.log(`${lh} - ${buyToken.name} confirmed as selected.`);
+            await initializeControlPanel();
             isSettingUp = false;
+            console.log(`${lh} - Completed setupTokensAndAmount successfully.`);
+            updateLog('Ready to swap');
             return true;
         } catch (error) {
-            console.error(`${lh} - Error in setupTokensAndAmount:`, error);
-            notifyUser('Pond0x Error', `Error setting up tokens: ${error.message}`);
-            updateLog(`Setup error: ${error.message}`);
-            setupRetryCount++;
-            if (setupRetryCount >= MAX_SETUP_RETRIES) {
-                console.error(`${lh} - Max setup retries (${MAX_SETUP_RETRIES}) reached. Reloading page...`);
-                notifyUser('Pond0x Error', 'Max setup retries reached. Reloading page...');
-                updateLog('Max retries, reloading');
-                sessionStorage.setItem('pond0xSwapReloaded', 'true');
-                window.location.reload();
-            }
+            console.error(`${lh} - Error in setupTokensAndAmount at ${new Date().toISOString()}:`, error);
+            notifyUser('Pond0x Error', `Error during token setup: ${error.message}`);
+            updateLog(`Error: ${error.message}`);
             isSettingUp = false;
             return false;
         }
     }
-    // [Start of Part 5]
-    // Part 5 includes swapping logic functions and main execution: startSwapping, performSwap, reInjectControlPanel, and main execution
 
     async function startSwapping() {
-        console.log(`${lh} - Starting swapping process at ${new Date().toISOString()}...`);
-        updateLog('Starting swaps');
+        console.log(`${lh} - Inside startSwapping function at ${new Date().toISOString()}...`);
 
-        const pageReady = await waitForPageReady();
-        if (!pageReady) {
-            console.error(`${lh} - Page not ready after waiting. Reloading...`);
-            notifyUser('Pond0x Error', 'Page not ready. Reloading...');
-            updateLog('Page not ready');
-            sessionStorage.setItem('pond0xSwapReloaded', 'true');
-            window.location.reload();
+        if (!swapButton) {
+            console.error(`${lh} - Swap button not found for swapping.`);
+            notifyUser('Pond0x Warning', 'Swap button not found.');
+            updateLog('Button missing');
+            isSwapRunning = false;
+            await GM.setValue('pond0xIsSwapRunning', false);
+            const startBtn = document.getElementById('startSwappingBtn');
+            if (startBtn) startBtn.disabled = false;
             return;
         }
-
-        await initializeControlPanel();
 
         if (!isSwapping) {
-            console.log(`${lh} - Swapping stopped before setup. Exiting startSwapping.`);
-            updateLog('Swapping stopped');
+            console.log(`${lh} - isSwapping is false, exiting startSwapping.`);
+            isSwapRunning = false;
+            await GM.setValue('pond0xIsSwapRunning', false);
+            const startBtn = document.getElementById('startSwappingBtn');
+            if (startBtn) startBtn.disabled = false;
             return;
         }
 
-        const setupSuccess = await setupTokensAndAmount(csrfToken);
-        if (!setupSuccess) {
-            console.error(`${lh} - Token and amount setup failed. Reloading...`);
-            notifyUser('Pond0x Error', 'Token and amount setup failed. Reloading...');
-            updateLog('Setup failed');
-            sessionStorage.setItem('pond0xSwapReloaded', 'true');
-            window.location.reload();
-            return;
-        }
-
-        console.log(`${lh} - Setup completed successfully. Beginning swap loop...`);
-        updateLog('Swap loop started');
-        await performSwap();
-    }
-
-    async function performSwap() {
-        console.log(`${lh} - Starting performSwap at ${new Date().toISOString()}...`);
-        let lastSwapTime = 0;
-        const SWAP_COOLDOWN = 5000; // 5 seconds cooldown between swap attempts
-
-        while (isSwapping && !isPaused) {
-            const now = Date.now();
-            if (now - lastSwapTime < SWAP_COOLDOWN) {
-                console.log(`${lh} - Swap attempt throttled. Waiting ${SWAP_COOLDOWN - (now - lastSwapTime)}ms...`);
-                await new Promise(resolve => setTimeout(resolve, SWAP_COOLDOWN - (now - lastSwapTime)));
-            }
-            lastSwapTime = now;
-
-            try {
-                if (!swapButton || !swapButton.isConnected) {
-                    swapButton = await waitForSwapButton();
-                    if (!swapButton) {
-                        console.error(`${lh} - Swap button not found during performSwap. Reloading...`);
-                        notifyUser('Pond0x Error', 'Swap button not found. Reloading...');
-                        updateLog('Swap button missing');
-                        sessionStorage.setItem('pond0xSwapReloaded', 'true');
-                        window.location.reload();
-                        return;
-                    }
+        const amountSet = await updateAmountInput();
+        if (!amountSet) {
+            console.warn(`${lh} - Failed to set swap amount. Retrying once...`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            if (!(await updateAmountInput())) {
+                console.error(`${lh} - Failed to set swap amount after retry. Stopping.`);
+                notifyUser('Pond0x Warning', 'Failed to set swap amount after retry. Stopping.');
+                updateLog('Amount retry failed');
+                isSwapping = false;
+                await GM.setValue('pond0xIsSwapping', false);
+                isSwapRunning = false;
+                await GM.setValue('pond0xIsSwapRunning', false);
+                const startBtn = document.getElementById('startSwappingBtn');
+                if (startBtn) {
+                    startBtn.textContent = 'Start Swapping';
+                    startBtn.style.background = '#28a745';
+                    startBtn.disabled = false;
                 }
-
-                if (swapButton.disabled) {
-                    console.log(`${lh} - Swap button is disabled, waiting for it to become enabled...`);
-                    updateLog('Waiting for button');
-                    let attempts = 0;
-                    const maxAttempts = 10;
-                    while (swapButton.disabled && attempts < maxAttempts && isSwapping && !isPaused) {
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-                        attempts++;
-                        console.log(`${lh} - Waiting for swap button to enable (attempt ${attempts}/${maxAttempts})...`);
-                    }
-                    if (swapButton.disabled) {
-                        console.error(`${lh} - Swap button still disabled after ${maxAttempts} attempts. Reloading...`);
-                        notifyUser('Pond0x Error', 'Swap button disabled. Reloading...');
-                        updateLog('Button disabled');
-                        sessionStorage.setItem('pond0xSwapReloaded', 'true');
-                        window.location.reload();
-                        return;
-                    }
-                }
-
-                console.log(`${lh} - Initiating swap: ${swapAmount} ${selectedSellToken} to ${selectedBuyToken}...`);
-                updateLog(`Swapping ${swapAmount} ${selectedSellToken}`);
-
-                let swapCompleted = false;
-                const startTime = Date.now();
-                swapButton.click();
-
-                while (Date.now() - startTime < SWAP_STUCK_TIMEOUT && !swapCompleted && isSwapping && !isPaused) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    const confirmButton = document.querySelector('button.text-xl.btntxt:not([disabled])');
-                    if (confirmButton && confirmButton.textContent.includes('Confirm')) {
-                        console.log(`${lh} - Confirm button found, clicking to confirm swap...`);
-                        confirmButton.click();
-                        swapCompleted = true;
-                    }
-                }
-
-                if (!swapCompleted) {
-                    console.error(`${lh} - Swap did not complete within ${SWAP_STUCK_TIMEOUT / 1000}s. Reloading...`);
-                    notifyUser('Pond0x Error', `Swap timed out after ${SWAP_STUCK_TIMEOUT / 1000}s. Reloading...`);
-                    updateLog('Swap timeout');
-                    sessionStorage.setItem('pond0xSwapReloaded', 'true');
-                    window.location.reload();
-                    return;
-                }
-
-                swapCounter++;
-                await GM.setValue('pond0xSwapCounter', swapCounter);
-                console.log(`${lh} - Swap completed successfully. Total swaps: ${swapCounter}`);
-                updateLog(`Swap ${swapCounter} done`);
-                notifyUser('Pond0x Swap', `Swap ${swapCounter} completed: ${swapAmount} ${selectedSellToken} to ${selectedBuyToken}`);
-
-                const swapCounterElement = document.getElementById('swapCounter');
-                if (swapCounterElement) {
-                    swapCounterElement.textContent = `Swaps Completed: ${swapCounter}`;
-                }
-
-                if (isRewardSwapsMode) {
-                    console.log(`${lh} - Reward Swaps mode active, swapping direction for next swap...`);
-                    const directionSuccess = await clickSwapDirectionButton();
-                    if (!directionSuccess) {
-                        console.error(`${lh} - Failed to swap direction in Reward Swaps mode. Reloading...`);
-                        notifyUser('Pond0x Error', 'Failed to swap direction. Reloading...');
-                        updateLog('Direction swap failed');
-                        sessionStorage.setItem('pond0xSwapReloaded', 'true');
-                        window.location.reload();
-                        return;
-                    }
-                    lastSwapDirection = lastSwapDirection === 'USDCtoUSDT' ? 'USDTtoUSDC' : 'USDCtoUSDT';
-                    await GM.setValue('pond0xLastSwapDirection', lastSwapDirection);
-                    console.log(`${lh} - Direction swapped to ${lastSwapDirection}`);
-                    updateLog(`Direction: ${lastSwapDirection}`);
-                }
-
-                await new Promise(resolve => setTimeout(resolve, retryInterval));
-            } catch (error) {
-                console.error(`${lh} - Error during swap:`, error);
-                notifyUser('Pond0x Error', `Swap error: ${error.message}`);
-                updateLog(`Error: ${error.message}`);
-                sessionStorage.setItem('pond0xSwapReloaded', 'true');
-                window.location.reload();
                 return;
             }
         }
 
-        console.log(`${lh} - Exiting performSwap loop: isSwapping=${isSwapping}, isPaused=${isPaused}`);
-        updateLog('Swap loop exited');
-    }
-
-    async function reInjectControlPanel() {
-        console.log(`${lh} - Re-injecting control panel...`);
-        if (controlPanel && document.body.contains(controlPanel)) {
-            controlPanel.remove();
-            console.log(`${lh} - Removed existing control panel`);
+        await performSwap();
+        isSwapRunning = false;
+        await GM.setValue('pond0xIsSwapRunning', false);
+        const startBtn = document.getElementById('startSwappingBtn');
+        if (!isSwapping && startBtn) {
+            startBtn.textContent = 'Start Swapping';
+            startBtn.style.background = '#28a745';
+            startBtn.disabled = false;
+            console.log(`${lh} - Re-enabled Start Swapping button after completion.`);
+            updateLog('Swapping done');
         }
-        controlPanel = null;
-        await initializeControlPanel();
-        console.log(`${lh} - Control panel re-injected successfully`);
     }
 
-    // Main execution
-    console.log(`${lh} - Starting AutoSwapper at ${new Date().toISOString()}...`);
-    await initializeControlPanel();
-    if (isAutoMode && isSwapping && !isPaused) {
-        console.log(`${lh} - Auto mode active, starting swapping process...`);
-        await startSwapping();
-    } else {
-        console.log(`${lh} - Auto mode inactive or paused, waiting for user interaction...`);
-        updateLog('Waiting for start');
+    async function performSwap() {
+        if (!isSwapping) {
+            isSwapRunning = false;
+            await GM.setValue('pond0xIsSwapRunning', false);
+            const startBtn = document.getElementById('startSwappingBtn');
+            if (startBtn) startBtn.disabled = false;
+            return;
+        }
+
+        console.log(`${lh} - Attempting swap #${swapCounter + 1} at ${new Date().toISOString()} (Sell: ${selectedSellToken}, Buy: ${selectedBuyToken})`);
+        updateLog(`Swap #${swapCounter + 1}`);
+
+        while (isSwapping) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            swapButton = document.querySelector('.text-xl.btntxt') || document.querySelector('[class*="btntxt"]');
+            if (!swapButton || !document.body.contains(swapButton)) {
+                swapButton = document.querySelector('.text-xl.btntxt') || document.querySelector('[class*="btntxt"]');
+                if (!swapButton) {
+                    console.error(`${lh} - Swap button not found after click. Possible rejection or page change. Stopping.`);
+                    notifyUser('Pond0x Warning', 'Swap button not found after click. Stopping.');
+                    updateLog('Button lost');
+                    isSwapping = false;
+                    await GM.setValue('pond0xIsSwapping', false);
+                    isSwapRunning = false;
+                    await GM.setValue('pond0xIsSwapRunning', false);
+                    const startBtn = document.getElementById('startSwappingBtn');
+                    if (startBtn) {
+                        startBtn.textContent = 'Start Swapping';
+                        startBtn.style.background = '#28a745';
+                        startBtn.disabled = false;
+                    }
+                    return;
+                }
+            }
+
+            if (swapButton.disabled) {
+                console.log(`${lh} - Swap button disabled. Waiting 1 second...`);
+                updateLog('Button disabled');
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                if (swapButton.disabled) {
+                    console.error(`${lh} - Swap button still disabled. Stopping.`);
+                    notifyUser('Pond0x Warning', 'Swap button still disabled. Stopping.');
+                    updateLog('Still disabled');
+                    isSwapping = false;
+                    await GM.setValue('pond0xIsSwapping', false);
+                    isSwapRunning = false;
+                    await GM.setValue('pond0xIsSwapRunning', false);
+                    const startBtn = document.getElementById('startSwappingBtn');
+                    if (startBtn) {
+                        startBtn.textContent = 'Start Swapping';
+                        startBtn.style.background = '#28a745';
+                        startBtn.disabled = false;
+                    }
+                    return;
+                }
+            }
+
+            swapButton.click();
+            console.log(`${lh} - Swap button clicked at ${new Date().toISOString()}.`);
+            updateLog('Swap clicked');
+
+            let stuckStartTime = Date.now();
+            let isStuck = false;
+
+            while (isSwapping) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                swapButton = document.querySelector('.text-xl.btntxt') || document.querySelector('[class*="btntxt"]');
+                if (!swapButton) {
+                    console.error(`${lh} - Swap button not found after click. Possible rejection or page change. Stopping.`);
+                    notifyUser('Pond0x Warning', 'Swap button not found after click. Stopping.');
+                    updateLog('Button lost');
+                    isSwapping = false;
+                    await GM.setValue('pond0xIsSwapping', false);
+                    isSwapRunning = false;
+                    await GM.setValue('pond0xIsSwapRunning', false);
+                    const startBtn = document.getElementById('startSwappingBtn');
+                    if (startBtn) {
+                        startBtn.textContent = 'Start Swapping';
+                        startBtn.style.background = '#28a745';
+                        startBtn.disabled = false;
+                    }
+                    return;
+                }
+
+                const buttonText = swapButton.textContent.toLowerCase();
+                const timeElapsed = Date.now() - stuckStartTime;
+
+                if (buttonText.includes('swap again')) {
+                    console.log(`${lh} - Swap button on 'swap again'. Clicking immediately...`);
+                    updateLog('Swap again');
+                    let retryAttempts = 0;
+                    const maxRetryAttempts = 3;
+                    while (retryAttempts < maxRetryAttempts) {
+                        swapButton.click();
+                        console.log(`${lh} - Attempt ${retryAttempts + 1}/${maxRetryAttempts}: Clicked 'Swap Again' at ${new Date().toISOString()}`);
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        swapButton = document.querySelector('.text-xl.btntxt') || document.querySelector('[class*="btntxt"]');
+                        if (!swapButton) {
+                            console.error(`${lh} - Swap button disappeared after clicking 'Swap Again'. Stopping.`);
+                            updateLog('Button lost');
+                            isSwapping = false;
+                            await GM.setValue('pond0xIsSwapping', false);
+                            isSwapRunning = false;
+                            await GM.setValue('pond0xIsSwapRunning', false);
+                            const startBtn = document.getElementById('startSwappingBtn');
+                            if (startBtn) {
+                                startBtn.textContent = 'Start Swapping';
+                                startBtn.style.background = '#28a745';
+                                startBtn.disabled = false;
+                            }
+                            return;
+                        }
+                        const newButtonText = swapButton.textContent.toLowerCase();
+                        if (!newButtonText.includes('swap again')) {
+                            console.log(`${lh} - Successfully transitioned from 'Swap Again' to '${newButtonText}' after ${retryAttempts + 1} attempts.`);
+                            swapCounter++;
+                            await GM.setValue('pond0xSwapCounter', swapCounter);
+                            document.getElementById('swapCounter').textContent = `Swaps Completed: ${swapCounter}`;
+                            notifyUser('Pond0x Swap', `Swap #${swapCounter} completed successfully (Sell: ${selectedSellToken}, Buy: ${selectedBuyToken}).`);
+                            updateLog(`Swap #${swapCounter} done`);
+                            stuckStartTime = Date.now();
+
+                            // Reward Swaps mode: Swap direction and reinput amount
+                            if (isRewardSwapsMode) {
+                                // Click the swap direction button
+                                const directionSuccess = await clickSwapDirectionButton();
+                                if (!directionSuccess) {
+                                    console.error(`${lh} - Failed to swap direction. Stopping.`);
+                                    isSwapping = false;
+                                    await GM.setValue('pond0xIsSwapping', false);
+                                    isSwapRunning = false;
+                                    await GM.setValue('pond0xIsSwapRunning', false);
+                                    const startBtn = document.getElementById('startSwappingBtn');
+                                    if (startBtn) {
+                                        startBtn.textContent = 'Start Swapping';
+                                        startBtn.style.background = '#28a745';
+                                        startBtn.disabled = false;
+                                    }
+                                    return;
+                                }
+
+                                // Swap the selected tokens in memory
+                                const tempToken = selectedSellToken;
+                                selectedSellToken = selectedBuyToken;
+                                selectedBuyToken = tempToken;
+                                await GM.setValue('pond0xSelectedSellToken', selectedSellToken);
+                                await GM.setValue('pond0xSelectedBuyToken', selectedBuyToken);
+                                lastSwapDirection = `${selectedSellToken}to${selectedBuyToken}`;
+                                await GM.setValue('pond0xLastSwapDirection', lastSwapDirection);
+                                console.log(`${lh} - Swapped direction: Sell=${selectedSellToken}, Buy=${selectedBuyToken}`);
+
+                                // Reinput the amount (9.02) for the new sell token
+                                const amountSet = await updateAmountInput();
+                                if (!amountSet) {
+                                    console.error(`${lh} - Failed to reinput amount after direction swap. Stopping.`);
+                                    notifyUser('Pond0x Error', 'Failed to reinput amount after direction swap.');
+                                    updateLog('Amount reinput failed');
+                                    isSwapping = false;
+                                    await GM.setValue('pond0xIsSwapping', false);
+                                    isSwapRunning = false;
+                                    await GM.setValue('pond0xIsSwapRunning', false);
+                                    const startBtn = document.getElementById('startSwappingBtn');
+                                    if (startBtn) {
+                                        startBtn.textContent = 'Start Swapping';
+                                        startBtn.style.background = '#28a745';
+                                        startBtn.disabled = false;
+                                    }
+                                    return;
+                                }
+                            }
+
+                            break;
+                        }
+                        retryAttempts++;
+                    }
+                    if (retryAttempts >= maxRetryAttempts) {
+                        console.error(`${lh} - Failed to transition out of 'Swap Again' after ${maxRetryAttempts} attempts. Reloading page...`);
+                        notifyUser('Pond0x Warning', `Swap stuck on 'Swap Again' after multiple attempts. Reloading page...`);
+                        updateLog('Stuck, reloading');
+                        await GM.setValue('pond0xLastSwapAmount', swapAmount);
+                        await GM.setValue('pond0xLastIsSwapping', true);
+                        sessionStorage.setItem('pond0xSwapReloaded', 'true');
+                        window.location.reload();
+                        return;
+                    }
+                    continue;
+                }
+
+                if (buttonText.includes('retry')) {
+                    console.log(`${lh} - Swap button stuck on 'retry'. Clicking immediately...`);
+                    updateLog('Retrying');
+                    swapButton.click();
+                    stuckStartTime = Date.now();
+                    continue;
+                }
+
+                if (buttonText.includes('swapping') || buttonText.includes('pending') || buttonText.includes('pending approvals') || buttonText.includes('preparing transactions')) {
+                    console.log(`${lh} - Swap in ${buttonText} state for ${timeElapsed}ms...`);
+                    updateLog(`${buttonText}`);
+                    if (timeElapsed > SWAP_STUCK_TIMEOUT) {
+                        console.warn(`${lh} - Swap stuck in ${buttonText} state for over 40 seconds. Reloading page...`);
+                        notifyUser('Pond0x Warning', `Swap stuck in ${buttonText} state for over 40 seconds. Reloading page...`);
+                        updateLog('Stuck, reloading');
+                        await GM.setValue('pond0xLastSwapAmount', swapAmount);
+                        await GM.setValue('pond0xLastIsSwapping', true);
+                        sessionStorage.setItem('pond0xSwapReloaded', 'true');
+                        window.location.reload();
+                        return;
+                    }
+                    isStuck = true;
+                } else if (buttonText.includes('loading')) {
+                    console.log(`${lh} - Swap button in 'loading...' state for ${timeElapsed}ms...`);
+                    updateLog('Loading...');
+                    if (timeElapsed > 10000) {
+                        console.warn(`${lh} - Swap stuck in 'loading...' state for over 10 seconds. Reloading page...`);
+                        notifyUser('Pond0x Warning', `Swap stuck in 'loading...' state for over 10 seconds. Reloading page...`);
+                        updateLog('Stuck, reloading');
+                        await GM.setValue('pond0xLastSwapAmount', swapAmount);
+                        await GM.setValue('pond0xLastIsSwapping', true);
+                        sessionStorage.setItem('pond0xSwapReloaded', 'true');
+                        window.location.reload();
+                        return;
+                    }
+                    isStuck = true;
+                } else {
+                    if (isStuck) {
+                        console.log(`${lh} - Swap state resolved after ${timeElapsed}ms.`);
+                        isStuck = false;
+                        stuckStartTime = Date.now();
+                    }
+                    if (buttonText.includes('swap')) {
+                        console.log(`${lh} - Swap button ready. Initiating next swap...`);
+                        updateLog('Ready for swap');
+                        swapButton.click();
+                        stuckStartTime = Date.now();
+                        continue;
+                    } else {
+                        console.error(`${lh} - Unexpected button state after click:`, buttonText, 'Stopping.');
+                        notifyUser('Pond0x Warning', `Unexpected button state: ${buttonText}. Stopping.`);
+                        updateLog(`State: ${buttonText}`);
+                        isSwapping = false;
+                        await GM.setValue('pond0xIsSwapping', false);
+                        isSwapRunning = false;
+                        await GM.setValue('pond0xIsSwapRunning', false);
+                        const startBtn = document.getElementById('startSwappingBtn');
+                        if (startBtn) {
+                            startBtn.textContent = 'Start Swapping';
+                            startBtn.style.background = '#28a745';
+                            startBtn.disabled = false;
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+
+        // In Reward Swaps mode, continue the loop indefinitely by initiating the next swap
+        if (isRewardSwapsMode && isSwapping) {
+            console.log(`${lh} - Reward Swaps mode: Initiating next swap in the cycle...`);
+            await new Promise(resolve => setTimeout(resolve, retryInterval));
+            await performSwap();
+        }
     }
 
-    window.addEventListener('beforeunload', async () => {
-        await GM.setValue('pond0xLastSwapAmount', swapAmount);
-        await GM.setValue('pond0xLastIsSwapping', isSwapping);
-        console.log(`${lh} - Saved state before unload: swapAmount=${swapAmount}, isSwapping=${isSwapping}`);
+    function reInjectControlPanel() {
+        if (!controlPanel || !document.body.contains(controlPanel)) {
+            console.log(`${lh} - Control panel missing, re-injecting at initial position...`);
+            document.body.appendChild(controlPanel);
+            
+            const currentLeft = parseInt(controlPanel.style.left) || parseInt(initialPanelPosition.left);
+            const currentTop = parseInt(controlPanel.style.top) || parseInt(initialPanelPosition.top.replace('px', ''));
+            controlPanel.style.left = `${currentLeft}px`;
+            controlPanel.style.top = `${currentTop}px`;
+            
+            let isDragging = false;
+            let currentX, currentY;
+            controlPanel.onmousedown = (e) => {
+                if (e.target.tagName !== 'BUTTON' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT' && !e.target.closest('button') && !e.target.closest('input') && !e.target.closest('select')) {
+                    isDragging = true;
+                    currentX = e.clientX - parseInt(controlPanel.style.left);
+                    currentY = e.clientY - parseInt(controlPanel.style.top);
+                    e.preventDefault();
+                }
+            };
+
+            document.onmousemove = (e) => {
+                if (isDragging) {
+                    controlPanel.style.left = `${e.clientX - currentX}px`;
+                    controlPanel.style.top = `${e.clientY - currentY}px`;
+                    const boxRect = controlPanel.getBoundingClientRect();
+                    if (boxRect.left < 0) controlPanel.style.left = '0px';
+                    if (boxRect.top < 0) controlPanel.style.top = '0px';
+                    if (boxRect.right > window.innerWidth) controlPanel.style.left = `${window.innerWidth - boxRect.width}px`;
+                    if (boxRect.bottom > window.innerHeight) controlPanel.style.top = `${window.innerHeight - boxRect.height}px`;
+                }
+            };
+
+            document.onmouseup = () => {
+                isDragging = false;
+            };
+
+            // Restore button states after re-injecting
+            const boostSwapsBtn = document.getElementById('boostSwapsBtn');
+            const rewardSwapsBtn = document.getElementById('rewardSwapsBtn');
+            const customSwapsBtn = document.getElementById('customSwapsBtn');
+            if (swapMode === 'Boost') {
+                boostSwapsBtn.style.background = '#28a745';
+                rewardSwapsBtn.style.background = '#00CED1';
+                customSwapsBtn.style.background = '#00CED1';
+            } else if (swapMode === 'Reward') {
+                rewardSwapsBtn.style.background = '#28a745';
+                boostSwapsBtn.style.background = '#00CED1';
+                customSwapsBtn.style.background = '#00CED1';
+            } else if (swapMode === 'Custom') {
+                customSwapsBtn.style.background = '#28a745';
+                boostSwapsBtn.style.background = '#00CED1';
+                rewardSwapsBtn.style.background = '#00CED1';
+            }
+
+            updateLog('Panel re-injected');
+        }
+    }
+
+    window.addEventListener('error', (event) => {
+        if (event.message.includes('Cannot read properties of undefined (reading \'syncProps\')')) {
+            console.error(`${lh} - Detected application error (syncProps) at ${new Date().toISOString()}. Stack:`, event.error?.stack);
+            updateLog('App error');
+            if (!hasReloaded) {
+                console.log(`${lh} - Reloading page to recover from application error...`);
+                sessionStorage.setItem('pond0xSwapReloaded', 'true');
+                window.location.reload();
+            } else if (setupRetryCount < MAX_SETUP_RETRIES) {
+                console.log(`${lh} - Page already reloaded, attempting to reinitialize setup (retry ${setupRetryCount + 1}/${MAX_SETUP_RETRIES})...`);
+                setupRetryCount++;
+                setTimeout(async () => {
+                    try {
+                        const success = await setupTokensAndAmount();
+                        if (success) {
+                            console.log(`${lh} - Setup reinitialized successfully after error at ${new Date().toISOString()}.`);
+                            sessionStorage.setItem('initialSetupDone', 'true');
+                        } else {
+                            console.error(`${lh} - Setup reinitialization failed at ${new Date().toISOString()}.`);
+                            notifyUser('Pond0x Error', 'Failed to reinitialize setup after error.');
+                            updateLog('Setup failed');
+                        }
+                    } catch (error) {
+                        console.error(`${lh} - Error during setup reinitialization at ${new Date().toISOString()}:`, error);
+                        notifyUser('Pond0x Error', `Error reinitializing setup: ${error.message}`);
+                        updateLog(`Error: ${error.message}`);
+                    }
+                }, 3000);
+            } else {
+                console.error(`${lh} - Max setup retries reached at ${new Date().toISOString()}. Cannot proceed.`);
+                notifyUser('Pond0x Error', 'Application error persists after reload and retries. Please try again later.');
+                updateLog('Max retries');
+            }
+        }
     });
+
+    if (hasReloaded) {
+        console.log(`${lh} - Page has already been reloaded once. Proceeding with caution...`);
+        updateLog('Reloaded');
+    }
+
+    console.log(`${lh} - Waiting for page to be ready before starting swap automation...`);
+    try {
+        const pageReady = await waitForPageReady();
+        if (!pageReady) {
+            console.warn(`${lh} - Page readiness check failed. Attempting to proceed anyway...`);
+            notifyUser('Pond0x Warning', 'Page took too long to load. Proceeding with swap setup, but functionality may be limited.');
+            updateLog('Page not ready');
+        }
+
+        console.log(`${lh} - Page readiness check completed. Scheduling token setup...`);
+        setTimeout(async () => {
+            try {
+                console.log(`${lh} - Starting token setup...`);
+                if (hasReloaded && isRewardSwapsMode) {
+                    // Restore the last known token pair direction
+                    if (lastSwapDirection === 'USDCtoUSDT') {
+                        selectedSellToken = 'USDC';
+                        selectedBuyToken = 'USDT';
+                    } else {
+                        selectedSellToken = 'USDT';
+                        selectedBuyToken = 'USDC';
+                    }
+                    await GM.setValue('pond0xSelectedSellToken', selectedSellToken);
+                    await GM.setValue('pond0xSelectedBuyToken', selectedBuyToken);
+                    console.log(`${lh} - Restored token pair after reload: Sell=${selectedSellToken}, Buy=${selectedBuyToken}`);
+                }
+                const setupSuccess = await setupTokensAndAmount();
+                if (setupSuccess) {
+                    sessionStorage.setItem('initialSetupDone', 'true');
+                    const amountSet = await updateAmountInput();
+                    if (!amountSet) {
+                        console.error(`${lh} - Failed to set swap amount after token setup during reload at ${new Date().toISOString()}.`);
+                        notifyUser('Pond0x Warning', 'Failed to set swap amount after reload. Please check manually.');
+                        updateLog('Amount failed');
+                    } else {
+                        console.log(`${lh} - Successfully set swap amount to ${swapAmount} after reload at ${new Date().toISOString()}.`);
+                    }
+                    if (hasReloaded && isSwapping && !isSwapRunning) {
+                        if (isAutoMode) {
+                            console.log(`${lh} - Auto mode: Auto-resuming swapping after reload at ${new Date().toISOString()}...`);
+                            isSwapRunning = true;
+                            await GM.setValue('pond0xIsSwapRunning', true);
+                            const startBtn = document.getElementById('startSwappingBtn');
+                            if (startBtn) {
+                                startBtn.textContent = 'Stop Swapping';
+                                startBtn.style.background = '#dc3545';
+                                startBtn.disabled = true;
+                            }
+                            await startSwapping();
+                            setTimeout(async () => {
+                                if (isSwapping && !isSwapRunning) {
+                                    console.log(`${lh} - Fallback: Re-initiating swap loop after reload delay at ${new Date().toISOString()}...`);
+                                    await startSwapping();
+                                }
+                            }, 2000);
+                        } else {
+                            console.log(`${lh} - Manual mode: Awaiting user input after reload at ${new Date().toISOString()}...`);
+                            isSwapping = false;
+                            isSwapRunning = false;
+                            await GM.setValue('pond0xIsSwapping', false);
+                            await GM.setValue('pond0xIsSwapRunning', false);
+                            const startBtn = document.getElementById('startSwappingBtn');
+                            if (startBtn) {
+                                startBtn.textContent = 'Start Swapping';
+                                startBtn.style.background = '#28a745';
+                                startBtn.disabled = false;
+                            }
+                            updateLog('Awaiting user input');
+                            notifyUser('Pond0x Info', 'Manual mode: Swapping stopped after reload. Please start swapping manually.');
+                        }
+                    }
+                } else if (setupRetryCount < MAX_SETUP_RETRIES) {
+                    setupRetryCount++;
+                    console.error(`${lh} - Initial setup failed at ${new Date().toISOString()}. Retrying (${setupRetryCount}/${MAX_SETUP_RETRIES}) in 5 seconds...`);
+                    notifyUser('Pond0x Warning', `Initial setup failed. Retrying (${setupRetryCount}/${MAX_SETUP_RETRIES})...`);
+                    updateLog(`Retry ${setupRetryCount}`);
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    const retrySuccess = await setupTokensAndAmount();
+                    if (retrySuccess) {
+                        sessionStorage.setItem('initialSetupDone', 'true');
+                        const amountSet = await updateAmountInput();
+                        if (!amountSet) {
+                            console.error(`${lh} - Failed to set swap amount after token setup during retry at ${new Date().toISOString()}.`);
+                            notifyUser('Pond0x Warning', 'Failed to set swap amount after retry. Please check manually.');
+                            updateLog('Amount failed');
+                        } else {
+                            console.log(`${lh} - Successfully set swap amount to ${swapAmount} after retry at ${new Date().toISOString()}.`);
+                        }
+                        if (hasReloaded && isSwapping && !isSwapRunning) {
+                            if (isAutoMode) {
+                                console.log(`${lh} - Auto mode: Auto-resuming swapping after successful retry at ${new Date().toISOString()}...`);
+                                isSwapRunning = true;
+                                await GM.setValue('pond0xIsSwapRunning', true);
+                                const startBtn = document.getElementById('startSwappingBtn');
+                                if (startBtn) {
+                                    startBtn.textContent = 'Stop Swapping';
+                                    startBtn.style.background = '#dc3545';
+                                    startBtn.disabled = true;
+                                }
+                                await startSwapping();
+                                setTimeout(async () => {
+                                    if (isSwapping && !isSwapRunning) {
+                                        console.log(`${lh} - Fallback: Re-initiating swap loop after retry delay at ${new Date().toISOString()}...`);
+                                        await startSwapping();
+                                    }
+                                }, 2000);
+                            } else {
+                                console.log(`${lh} - Manual mode: Awaiting user input after retry at ${new Date().toISOString()}...`);
+                                isSwapping = false;
+                                isSwapRunning = false;
+                                await GM.setValue('pond0xIsSwapping', false);
+                                await GM.setValue('pond0xIsSwapRunning', false);
+                                const startBtn = document.getElementById('startSwappingBtn');
+                                if (startBtn) {
+                                    startBtn.textContent = 'Start Swapping';
+                                    startBtn.style.background = '#28a745';
+                                    startBtn.disabled = false;
+                                }
+                                updateLog('Awaiting user input');
+                                notifyUser('Pond0x Info', 'Manual mode: Swapping stopped after retry. Please start swapping manually.');
+                            }
+                        }
+                    } else {
+                        console.error(`${lh} - Initial setup failed after retry ${setupRetryCount} at ${new Date().toISOString()}.`);
+                        notifyUser('Pond0x Error', `Initial setup failed after ${setupRetryCount} retries.`);
+                        updateLog(`Failed after ${setupRetryCount}`);
+                    }
+                } else {
+                    console.error(`${lh} - Max setup retries reached at ${new Date().toISOString()}. Aborting.`);
+                    notifyUser('Pond0x Error', 'Initial setup failed after maximum retries.');
+                    updateLog('Max retries');
+                }
+            } catch (error) {
+                console.error(`${lh} - Error in token setup at ${new Date().toISOString()}:`, error);
+                notifyUser('Pond0x Error', `Error during token setup: ${error.message}`);
+                updateLog(`Error: ${error.message}`);
+                isSettingUp = false;
+            }
+        }, 1000);
+    } catch (error) {
+        console.error(`${lh} - Error in main execution flow at ${new Date().toISOString()}:`, error);
+        notifyUser('Pond0x Error', `Error initializing swapper: ${error.message}`);
+        updateLog(`Init error`);
+    }
 })();
