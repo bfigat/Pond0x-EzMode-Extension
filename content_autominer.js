@@ -806,8 +806,8 @@
             isControlPanelReady = true;
         }
     };
-        // [Start of Part 4]
-    // Part 4 includes the mining logic functions: checkMiningStatus, startMining, run
+    // [Start of Part 4]
+    // Part 4 includes the mining logic functions: checkMiningStatus, startMining, scheduleStatusCheck, run
 
     const checkMiningStatus = async () => {
         return new Promise(async (resolve) => {
@@ -838,7 +838,7 @@
 
             if (!pollingStarted) {
                 console.warn(`${lh} - Status polling failed to start. Retrying in 5 seconds...`);
-                statusLock = false; // Reset statusLock on failure
+                statusLock = false;
                 setTimeout(() => checkMiningStatus().then(resolve), 5000);
                 resolve(false);
                 return;
@@ -868,10 +868,9 @@
                 if (statusSpan) statusSpan.textContent = currentGlobalStatus;
                 updateClaimSummaryBox();
 
-                if (status === 'Mining: Active' && !isMiningRunning && !startedMining && !isPaused) { // Added !isPaused check
+                if (status === 'Mining: Active' && !isMiningRunning && !startedMining && !isPaused) {
                     startedMining = true;
                     console.log(`${lh} - Global mining active. Starting session and stopping polling...`);
-                    // Stop polling after successful mining start
                     chrome.runtime.sendMessage({ type: 'stopStatusPolling' }, (response) => {
                         if (chrome.runtime.lastError) {
                             console.error(`${lh} - Failed to send stopStatusPolling message: ${chrome.runtime.lastError.message}`);
@@ -879,7 +878,6 @@
                             console.log(`${lh} - Stopped status polling successfully`);
                         }
                     });
-                    // Close the status-mini tab after mining starts
                     chrome.runtime.sendMessage({ type: 'closeStatusTab' }, (response) => {
                         if (chrome.runtime.lastError) {
                             console.error(`${lh} - Failed to send closeStatusTab message: ${chrome.runtime.lastError.message}`);
@@ -888,17 +886,12 @@
                         }
                     });
                     chrome.runtime.onMessage.removeListener(handler);
-                    statusLock = false; // Reset statusLock before starting mining
+                    statusLock = false;
                     startMining().then(() => {
                         resolve(true);
                     }).catch((error) => {
                         console.error(`${lh} - Error starting mining: ${error.message}`);
-                        try {
-                            notifyUser('Pond0x Error', `Error starting mining: ${error.message}`);
-                        } catch (notifyError) {
-                            console.error(`${lh} - Failed to send notification: ${notifyError.message}. Continuing...`);
-                        }
-                        // Ensure the status-mini tab is closed even if mining fails
+                        notifyUser('Pond0x Error', `Error starting mining: ${error.message}`);
                         chrome.runtime.sendMessage({ type: 'closeStatusTab' }, (response) => {
                             if (chrome.runtime.lastError) {
                                 console.error(`${lh} - Failed to send closeStatusTab message: ${chrome.runtime.lastError.message}`);
@@ -906,7 +899,7 @@
                                 console.log(`${lh} - Status-mini tab closed successfully after mining failure`);
                             }
                         });
-                        statusLock = false; // Ensure statusLock is reset on failure
+                        statusLock = false;
                         resolve(false);
                     });
                 }
@@ -918,12 +911,18 @@
     };
 
     const startMining = async () => {
+        if (isMiningRunning) {
+            console.log(`${lh} - Mining already running, skipping startMining...`);
+            statusLock = false;
+            return;
+        }
+
         statusLock = true;
 
         // Track retries for Auto Mode
         let mineButtonRetries = 0;
-        const maxMineButtonRetries = 4; // Retry 4 times before scheduling another status check
-        const retryDelay = 2000; // 2 seconds between retries
+        const maxMineButtonRetries = 4;
+        const retryDelay = 2000;
 
         let mineBtn = searchNodeByContent('button', 'Mine');
         while (!mineBtn && mineButtonRetries < maxMineButtonRetries && isAutoMode) {
@@ -933,16 +932,14 @@
             mineButtonRetries++;
         }
 
-        // In Auto Mode, schedule another status check if Mine button is not found
         if (!mineBtn && mineButtonRetries >= maxMineButtonRetries && isAutoMode) {
             console.warn(`${lh} - Mine button not found after ${maxMineButtonRetries} retries in Auto Mode. Scheduling another status check...`);
             notifyUser('Pond0x Warning', `Mine button not found after ${maxMineButtonRetries} retries. Retrying status check...`);
             statusLock = false;
-            setTimeout(scheduleStatusCheck, 5000); // Schedule a status check in 5 seconds
+            setTimeout(scheduleStatusCheck, 5000);
             return;
         }
 
-        // In Manual Mode, reload immediately if Mine button is not found
         if (!mineBtn && !isAutoMode) {
             console.warn(`${lh} - No Mine button found in Manual Mode. Reloading page...`);
             notifyUser('Pond0x Warning', 'No Mine button found in Manual Mode. Reloading page...');
@@ -950,7 +947,7 @@
             reloadReason = 'Mine Button Not Found (Manual Mode)';
             await GM.setValue('pond0xPageReloads', pageReloads);
             await GM.setValue('pond0xReloadReason', reloadReason);
-            sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
+            sessionStorage.setItem('pond0xReloaded', 'true');
             window.location.href = 'https://www.pond0x.com/mining';
             statusLock = false;
             return;
@@ -960,11 +957,10 @@
             console.log(`${lh} - Starting mining session...`);
             mineBtn.click();
 
-            // Wait for the Phantom pop-up to be confirmed and LCD panel to render
             let lcdContainer = null;
             let attempts = 0;
-            const maxAttempts = 20; // Up to 20 seconds
-            const retryDelay = 1000; // 1-second intervals
+            const maxAttempts = 20;
+            const retryDelay = 1000;
 
             while (!lcdContainer && attempts < maxAttempts) {
                 console.log(`${lh} - Waiting for LCD container after mine click (attempt ${attempts + 1}/${maxAttempts})...`);
@@ -980,9 +976,8 @@
 
             if (lcdContainer) {
                 console.log(`${lh} - LCD container found after ${attempts} attempts`);
-                // Wait up to 2 minutes for unclaimed value to populate
                 let unclaimed = '';
-                const maxWaitAttempts = 120; // 2 minutes at 1-second intervals
+                const maxWaitAttempts = 120;
                 let waitAttempts = 0;
 
                 while (waitAttempts < maxWaitAttempts && !unclaimed) {
@@ -993,10 +988,9 @@
                     waitAttempts++;
                 }
 
-                // Retry fetching hashrate if initially 0
                 let hashrate = parseFloat(getLCDParams().hashrate) || 0;
                 let hashrateRetries = 0;
-                const maxHashrateRetries = 5; // Retry up to 5 times
+                const maxHashrateRetries = 5;
                 while (hashrate === 0 && hashrateRetries < maxHashrateRetries) {
                     console.log(`${lh} - Hashrate is 0 (attempt ${hashrateRetries + 1}/${maxHashrateRetries}). Retrying in ${retryDelay / 1000}s...`);
                     await new Promise(resolve => setTimeout(resolve, retryDelay));
@@ -1009,25 +1003,22 @@
                 if (hashrate > 0 && unclaimed && !invalidUnclaimedValues.includes(unclaimed)) {
                     console.log(`${lh} - Mining started successfully with hashrate ${hashrate}h/s, unclaimed: ${unclaimed}`);
                     notifyUser('Pond0x Mining', 'Mining started successfully');
-                    // Ensure summary box is created/updated with LCD
                     if (!summaryBoxCreated) {
                         createSummaryBoxNow(lcdContainer);
                         summaryBoxCreated = true;
                     } else {
                         await updateClaimSummaryBox();
                     }
-                    // Set autominerManuallyStarted if not already set (for manual mode)
                     if (!autominerManuallyStarted) {
                         autominerManuallyStarted = true;
                         await GM.setValue('pond0xAutominerStarted', true);
                     }
                     window.pond0xO.startTime = getTime();
-                    isMiningRunning = true; // Set mining state to active
+                    isMiningRunning = true;
                     await GM.setValue('pond0xIsMiningRunning', true);
                 } else if (invalidUnclaimedValues.includes(unclaimed)) {
-                    console.warn(`${lh} - Mining start failed: Invalid unclaimed value ${unclaimed} detected after 2 minutes`);
+                    console.warn(`${lh} - Mining start failed: Invalid unclaimed value ${unclaimed}`);
                     notifyUser('Pond0x Warning', `Mining start failed: Invalid unclaimed value ${unclaimed}`);
-                    // Reset mining state and reload
                     isMiningRunning = false;
                     await GM.setValue('pond0xIsMiningRunning', false);
                     window.pond0xO.startTime = null;
@@ -1035,40 +1026,26 @@
                     reloadReason = 'Invalid Unclaimed Value Reload';
                     await GM.setValue('pond0xPageReloads', pageReloads);
                     await GM.setValue('pond0xReloadReason', reloadReason);
-                    sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
-                    console.log(`${lh} - Reloading page due to invalid unclaimed value...`);
+                    sessionStorage.setItem('pond0xReloaded', 'true');
                     window.location.href = 'https://www.pond0x.com/mining';
                     return;
                 } else {
-                    console.warn(`${lh} - Mining start failed: Hashrate=${hashrate}, Unclaimed=${unclaimed} (timeout after 2 minutes)`);
-                    notifyUser('Pond0x Warning', `Mining start failed: Hashrate=${hashrate}, Unclaimed=${unclaimed} (timeout)`);
-                    // Reset mining state and schedule another status check
+                    console.warn(`${lh} - Mining start failed: Hashrate=${hashrate}, Unclaimed=${unclaimed}`);
+                    notifyUser('Pond0x Warning', `Mining start failed: Hashrate=${hashrate}, Unclaimed=${unclaimed}`);
                     isMiningRunning = false;
                     await GM.setValue('pond0xIsMiningRunning', false);
                     window.pond0xO.startTime = null;
-                    console.log(`${lh} - Scheduling another status check due to mining start failure...`);
-                    setTimeout(scheduleStatusCheck, 5000); // Schedule a status check in 5 seconds
+                    setTimeout(scheduleStatusCheck, 5000);
                 }
             } else {
-                console.warn(`${lh} - LCD container not found after ${maxAttempts} attempts, falling back to observer...`);
+                console.warn(`${lh} - LCD container not found after ${maxAttempts} attempts`);
                 notifyUser('Pond0x Warning', 'LCD container not found after mine click');
-                observeLCDContainer(); // Restart observer to catch LCD later
-                // Reset mining state on failure
+                observeLCDContainer();
                 isMiningRunning = false;
                 await GM.setValue('pond0xIsMiningRunning', false);
                 window.pond0xO.startTime = null;
-                console.log(`${lh} - Scheduling another status check due to LCD container not found...`);
-                setTimeout(scheduleStatusCheck, 5000); // Schedule a status check in 5 seconds
+                setTimeout(scheduleStatusCheck, 5000);
             }
-        } else {
-            console.warn(`${lh} - No Mine button found to start mining`);
-            notifyUser('Pond0x Warning', 'No Mine button found to start mining');
-            // Reset mining state on failure
-            isMiningRunning = false;
-            await GM.setValue('pond0xIsMiningRunning', false);
-            window.pond0xO.startTime = null;
-            console.log(`${lh} - Scheduling another status check due to Mine button not found...`);
-            setTimeout(scheduleStatusCheck, 5000); // Schedule a status check in 5 seconds
         }
         statusLock = false;
     };
@@ -1080,7 +1057,7 @@
         }
         const now = getTime();
         const timeSinceLastCheck = now - lastStatusCheckTime;
-        const MIN_CHECK_INTERVAL = 30; // Minimum 30 seconds between checks
+        const MIN_CHECK_INTERVAL = 30;
         if (timeSinceLastCheck < MIN_CHECK_INTERVAL) {
             console.log(`${lh} - Status check throttled. Next check in ${MIN_CHECK_INTERVAL - timeSinceLastCheck} seconds`);
             setTimeout(scheduleStatusCheck, (MIN_CHECK_INTERVAL - timeSinceLastCheck) * 1000);
@@ -1088,7 +1065,9 @@
         }
         lastStatusCheckTime = now;
         await checkMiningStatus();
-        setTimeout(scheduleStatusCheck, MIN_CHECK_INTERVAL * 1000);
+        if (!isMiningRunning) {
+            setTimeout(scheduleStatusCheck, MIN_CHECK_INTERVAL * 1000); // Only reschedule if mining isn’t active
+        }
     };
 
     const run = async () => {
@@ -1103,26 +1082,20 @@
             return;
         }
 
-        // Log the current state for debugging
         console.log(`${lh} - Run cycle state: hashrate=${parseFloat(getLCDParams().hashrate) || 0}h/s, autominerManuallyStarted=${autominerManuallyStarted}, claimCount=${claimCount}, isAutoMode=${isAutoMode}, pageReloads=${pageReloads}, isClaimWaitMode=${isClaimWaitMode}`);
 
-        // Check network status
         const isOnline = navigator.onLine;
         if (!isOnline) {
             console.warn(`${lh} - Network disconnected. Attempting to recover...`);
-            try {
-                notifyUser('Pond0x Warning', 'Network disconnected. Waiting for reconnection...');
-            } catch (error) {
-                console.error(`${lh} - Failed to send notification: ${error.message}. Continuing...`);
-            }
-            await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+            notifyUser('Pond0x Warning', 'Network disconnected. Waiting for reconnection...');
+            await new Promise(resolve => setTimeout(resolve, 5000));
             if (!navigator.onLine) {
                 console.error(`${lh} - Network still disconnected. Reloading page to recover...`);
                 pageReloads++;
                 reloadReason = 'Network Disconnection Recovery';
                 await GM.setValue('pond0xPageReloads', pageReloads);
                 await GM.setValue('pond0xReloadReason', reloadReason);
-                sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
+                sessionStorage.setItem('pond0xReloaded', 'true');
                 window.location.href = 'https://www.pond0x.com/mining';
                 return;
             } else {
@@ -1130,7 +1103,6 @@
             }
         }
 
-        // Check mining parameters only if LCD is available (for active mining states)
         let lcdContainer = document.querySelector('.screenshadow') ||
                           document.querySelector('.bg-\\[\\#414f76\\]') ||
                           document.querySelector('.mining-display') ||
@@ -1143,12 +1115,11 @@
         const runTime = getTime();
         const timeSinceStart = window.pond0xO.startTime ? (runTime - window.pond0xO.startTime) : 0;
 
-        // Retry hash rate check if it drops unexpectedly (possible network issue)
         if (hashrate === 0 && lcdContainer && isMiningRunning) {
             console.warn(`${lh} - Hash rate dropped to 0 unexpectedly. Retrying to confirm...`);
             let retryAttempts = 0;
             const maxRetryAttempts = 3;
-            const retryDelay = 2000; // 2 seconds between retries
+            const retryDelay = 2000;
 
             while (retryAttempts < maxRetryAttempts) {
                 await new Promise(resolve => setTimeout(resolve, retryDelay));
@@ -1161,54 +1132,34 @@
                 }
                 retryAttempts++;
             }
-
-            if (hashrate === 0) {
-                console.warn(`${lh} - Hash rate confirmed as 0 after ${maxRetryAttempts} retries. Proceeding with claim logic...`);
-            }
         }
 
-        // Update mining status and UI if hashrate > 0
         if (hashrate > 0) {
             if (!window.pond0xO.startTime) {
                 window.pond0xO.startTime = runTime;
             }
             lastStatusMessage = `Status: Unclaimed: "${currentUnclaimed}", Hashrate: ${hashrate}h/s, Time: ${timeSinceStart}s`;
             console.log(`${lh} - ${lastStatusMessage}`);
-            try {
-                notifyUser('Pond0x Mining Status', lastStatusMessage);
-            } catch (error) {
-                console.error(`${lh} - Failed to send notification: ${error.message}. Continuing...`);
-            }
+            notifyUser('Pond0x Mining Status', lastStatusMessage);
             if (!summaryBoxCreated && lcdContainer) {
                 createSummaryBoxNow(lcdContainer);
                 summaryBoxCreated = true;
             } else if (summaryBoxCreated) {
                 await updateClaimSummaryBox();
             }
-            isMiningRunning = true; // Ensure mining state is active
+            isMiningRunning = true;
             await GM.setValue('pond0xIsMiningRunning', true);
         } else if (!autominerManuallyStarted && claimCount === 0 && pageReloads === 0) {
-            console.log(`${lh} - No hashrate detected and first run, waiting for manual start via 'Start Autominer' button...`);
+            console.log(`${lh} - No hashrate detected and first run, waiting for manual start...`);
             runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval));
             return;
         }
 
-        // Auto mode: Check global mining status only if not already running or on page reload
         if (isAutoMode && !isMiningRunning) {
             if (getTime() - lastStatusCheckTime >= 30 || lastStatusCheckTime === 0 || pageReloads > 0) {
                 lastStatusCheckTime = getTime();
                 console.log(`${lh} - Starting status check at ${new Date().toISOString()} due to ${lastStatusCheckTime === 0 ? 'initial run' : pageReloads > 0 ? 'page reload' : '30-second interval'}`);
-                try {
-                    isMiningActive = await checkMiningStatus();
-                } catch (error) {
-                    console.error(`${lh} - Error checking mining status: ${error.message}`);
-                    try {
-                        notifyUser('Pond0x Error', `Error checking mining status: ${error.message}`);
-                    } catch (notifyError) {
-                        console.error(`${lh} - Failed to send notification: ${notifyError.message}. Continuing...`);
-                    }
-                    isMiningActive = false;
-                }
+                isMiningActive = await checkMiningStatus();
                 if (isMiningActive) {
                     consecutiveStoppedCount = 0;
                     nextRetryTime = null;
@@ -1224,11 +1175,9 @@
                 }
             }
         } else if (!isAutoMode && !hashrate && !isMiningRunning) {
-            // Manual mode: Start mining immediately if no hashrate and not already mining
             await startMining();
         }
 
-        // Validate unclaimed value (only if LCD is available)
         let currentUnclaimedNum = 0;
         if (lcdContainer && currentUnclaimed && !['100k', '1m', '1.1m'].includes(currentUnclaimed)) {
             currentUnclaimedNum = parseFloat(currentUnclaimed.replace('m', '')) || 0;
@@ -1239,20 +1188,32 @@
             }
         }
 
-        // Determine which button to look for based on unclaimed value
         const buttons = {
             stop: currentUnclaimedNum < 100000000 ? searchNodeByContent('button', 'STOP ANYWAYS') : null,
             claim: searchNodeByContent('button', 'STOP & Claim')
         };
 
-        // Enforce maximum session time of 150 minutes (9000 seconds)
-        const effectiveClaimIntervalSeconds = Math.min(claimIntervalMinutes * 60, 150 * 60); // Cap at 150 minutes
+        // Retry button detection if hash rate is 0
+        if (lcdContainer && hashrate === 0 && isMiningRunning && (!buttons.stop && !buttons.claim)) {
+            console.log(`${lh} - No claim/stop button found with hashrate 0, retrying detection...`);
+            let buttonRetries = 0;
+            const maxButtonRetries = 3;
+            const buttonRetryDelay = 1000;
+            while ((!buttons.stop && !buttons.claim) && buttonRetries < maxButtonRetries) {
+                await new Promise(resolve => setTimeout(resolve, buttonRetryDelay));
+                buttons.stop = currentUnclaimedNum < 100000000 ? searchNodeByContent('button', 'STOP ANYWAYS') : null;
+                buttons.claim = searchNodeByContent('button', 'STOP & Claim');
+                buttonRetries++;
+                console.log(`${lh} - Button retry ${buttonRetries}/${maxButtonRetries}: stop=${!!buttons.stop}, claim=${!!buttons.claim}`);
+            }
+        }
+
+        const effectiveClaimIntervalSeconds = Math.min(claimIntervalMinutes * 60, 150 * 60);
         console.log(`${lh} - Effective claim interval: ${effectiveClaimIntervalSeconds / 60} minutes (user-set: ${claimIntervalMinutes} minutes)`);
 
-        // Priority 1: Claim and reload if hash rate is 0
         if (lcdContainer && hashrate === 0 && (buttons.stop || buttons.claim)) {
             console.log(`${lh} - Hash rate is 0, initiating claim and reload...`);
-            const claimButton = buttons.claim || buttons.stop; // Prefer "STOP & Claim" if available
+            const claimButton = buttons.claim || buttons.stop;
             if (claimButton) {
                 isClaiming = true;
                 lastClaimTime = getTime();
@@ -1267,9 +1228,8 @@
 
                 console.log(`${lh} - Clicking ${claimButton.textContent} due to hash rate 0...`);
                 claimButton.click();
-                await new Promise(resolve => setTimeout(resolve, getTimeMS(6))); // Wait for claim to process
+                await new Promise(resolve => setTimeout(resolve, getTimeMS(6)));
 
-                // Update claim stats
                 claimCount++;
                 totalClaimed += currentUnclaimedNum;
                 lastClaimValue = currentUnclaimedNum;
@@ -1278,51 +1238,40 @@
                 await GM.setValue('pond0xTotalClaimed', totalClaimed);
                 await GM.setValue('pond0xLastClaim', lastClaimValue);
 
-                // Reset mining state
                 isMiningRunning = false;
                 await GM.setValue('pond0xIsMiningRunning', false);
-                window.pond0xO.startTime = null; // Reset start time for next session
+                window.pond0xO.startTime = null;
 
-                if (!isAutoMode) { // Manual mode specific logic
-                    console.log(`${lh} - Manual mode: Claim completed, stopping autominer and preparing for user interaction...`);
+                if (!isAutoMode) {
+                    console.log(`${lh} - Manual mode: Claim completed, stopping autominer...`);
                     if (runTimeout) {
                         clearTimeout(runTimeout);
                         runTimeout = null;
-                        console.log(`${lh} - Cleared runTimeout in manual mode after claim`);
                     }
                     const toggleMiningBtn = document.getElementById('toggleMiningBtn');
                     if (toggleMiningBtn) {
                         toggleMiningBtn.textContent = 'Start Manual Mining';
-                        toggleMiningBtn.style.background = '#28a745'; // Green for start
+                        toggleMiningBtn.style.background = '#28a745';
                     }
-                    try {
-                        notifyUser('Pond0x Claim', `Claim successful in manual mode: ${formatClaimValue(currentUnclaimedNum)} tokens. Awaiting user action...`);
-                    } catch (error) {
-                        console.error(`${lh} - Failed to send notification: ${error.message}. Continuing...`);
-                    }
+                    notifyUser('Pond0x Claim', `Claim successful in manual mode: ${formatClaimValue(currentUnclaimedNum)} tokens. Awaiting user action...`);
                 }
 
-                // Handle Claim + Wait mode
                 if (isClaimWaitMode && isAutoMode) {
                     console.log(`${lh} - Claim + Wait mode active, pausing for 20 minutes...`);
                     notifyUser('Pond0x Claim', `Claim successful due to hash rate 0: ${formatClaimValue(currentUnclaimedNum)} tokens. Waiting 20 minutes...`);
                     isPaused = true;
-                    await GM.setValue('pond0xMinerIsPaused', true); // Changed to unique key for AutoMiner
+                    await GM.setValue('pond0xMinerIsPaused', true);
                     document.getElementById('pauseResumeBtn').textContent = 'Resume';
                     document.getElementById('pauseResumeBtn').style.background = '#28a745';
                     document.getElementById('pauseResumeBtn').style.color = 'white';
                     await new Promise(resolve => setTimeout(resolve, getTimeMS(20 * 60)));
                     isPaused = false;
-                    await GM.setValue('pond0xMinerIsPaused', false); // Changed to unique key for AutoMiner
+                    await GM.setValue('pond0xMinerIsPaused', false);
                     document.getElementById('pauseResumeBtn').textContent = 'Pause';
                     document.getElementById('pauseResumeBtn').style.background = '#ffc107';
                     document.getElementById('pauseResumeBtn').style.color = 'black';
                 } else if (isAutoMode) {
-                    try {
-                        notifyUser('Pond0x Claim', `Claim successful due to hash rate 0: ${formatClaimValue(currentUnclaimedNum)} tokens`);
-                    } catch (error) {
-                        console.error(`${lh} - Failed to send notification: ${error.message}. Continuing...`);
-                    }
+                    notifyUser('Pond0x Claim', `Claim successful due to hash rate 0: ${formatClaimValue(currentUnclaimedNum)} tokens`);
                 }
 
                 lastStatusCheckTime = 0;
@@ -1330,43 +1279,34 @@
                 reloadReason = isClaimWaitMode ? 'Claim + Wait 20 Mins' : 'Hash Rate Zero Claim';
                 await GM.setValue('pond0xPageReloads', pageReloads);
                 await GM.setValue('pond0xReloadReason', reloadReason);
-                console.log(`${lh} - Updated reload reason to ${reloadReason} after hash rate zero claim`);
-
                 console.log(`${lh} - Reloading page to start next session...`);
-                sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
+                sessionStorage.setItem('pond0xReloaded', 'true');
                 window.location.href = 'https://www.pond0x.com/mining';
-                return; // Exit the run loop to prevent further actions
+                return;
             } else {
-                console.warn(`${lh} - No claim button found despite hash rate 0`);
-                try {
-                    notifyUser('Pond0x Warning', 'No claim button found despite hash rate 0');
-                } catch (error) {
-                    console.error(`${lh} - Failed to send notification: ${error.message}. Continuing...`);
-                }
+                console.warn(`${lh} - No claim button found despite hash rate 0 after retries`);
+                notifyUser('Pond0x Warning', 'No claim button found despite hash rate 0');
             }
         }
 
-        // Skip reload if unclaimed value is invalid (only if LCD is available)
         if (lcdContainer && ['100k', '1m', '1.1m'].includes(currentUnclaimed)) {
             console.warn(`${lh} - Detected invalid unclaimed value ${currentUnclaimed}, reloading page...`);
             pageReloads++;
             reloadReason = 'Invalid Unclaimed Value Reload';
             await GM.setValue('pond0xPageReloads', pageReloads);
             await GM.setValue('pond0xReloadReason', reloadReason);
-            sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
+            sessionStorage.setItem('pond0xReloaded', 'true');
             window.location.href = 'https://www.pond0x.com/mining';
             return;
         }
 
-        // Priority 2: Smart claim or time-based claim if hash rate is not 0 and conditions are met
         if (lcdContainer && hashrate > 0 && (buttons.stop || buttons.claim)) {
-            // Determine if we should claim based on Smart Claim or time threshold
             const shouldClaim =
-                timeSinceStart > effectiveClaimIntervalSeconds || // Enforce effective claim interval (capped at 150 minutes)
-                (isSmartClaimEnabled && currentUnclaimedNum >= smartClaimThreshold); // Smart Claim when enabled and threshold met
+                timeSinceStart > effectiveClaimIntervalSeconds ||
+                (isSmartClaimEnabled && currentUnclaimedNum >= smartClaimThreshold);
 
             if (shouldClaim) {
-                const claimButton = buttons.claim || buttons.stop; // Prefer "STOP & Claim" if available
+                const claimButton = buttons.claim || buttons.stop;
                 if (claimButton) {
                     if (currentUnclaimedNum <= 0) {
                         console.warn(`${lh} - Skipping claim due to invalid unclaimed amount: ${currentUnclaimed}`);
@@ -1389,9 +1329,8 @@
                         : `smart claim threshold (${formatClaimValue(smartClaimThreshold)})`; 
                     console.log(`${lh} - Clicking ${claimButton.textContent} due to ${claimReason}...`);
                     claimButton.click();
-                    await new Promise(resolve => setTimeout(resolve, getTimeMS(6))); // Wait for claim to process
+                    await new Promise(resolve => setTimeout(resolve, getTimeMS(6)));
 
-                    // Update claim stats
                     claimCount++;
                     totalClaimed += currentUnclaimedNum;
                     lastClaimValue = currentUnclaimedNum;
@@ -1400,51 +1339,40 @@
                     await GM.setValue('pond0xTotalClaimed', totalClaimed);
                     await GM.setValue('pond0xLastClaim', lastClaimValue);
 
-                    // Reset mining state
                     isMiningRunning = false;
                     await GM.setValue('pond0xIsMiningRunning', false);
-                    window.pond0xO.startTime = null; // Reset start time for next session
+                    window.pond0xO.startTime = null;
 
-                    if (!isAutoMode) { // Manual mode specific logic
-                        console.log(`${lh} - Manual mode: Claim completed, stopping autominer and preparing for user interaction...`);
+                    if (!isAutoMode) {
+                        console.log(`${lh} - Manual mode: Claim completed, stopping autominer...`);
                         if (runTimeout) {
                             clearTimeout(runTimeout);
                             runTimeout = null;
-                            console.log(`${lh} - Cleared runTimeout in manual mode after claim`);
                         }
                         const toggleMiningBtn = document.getElementById('toggleMiningBtn');
                         if (toggleMiningBtn) {
                             toggleMiningBtn.textContent = 'Start Manual Mining';
-                            toggleMiningBtn.style.background = '#28a745'; // Green for start
+                            toggleMiningBtn.style.background = '#28a745';
                         }
-                        try {
-                            notifyUser('Pond0x Claim', `Claim successful in manual mode: ${formatClaimValue(currentUnclaimedNum)} tokens. Awaiting user action...`);
-                        } catch (error) {
-                            console.error(`${lh} - Failed to send notification: ${error.message}. Continuing...`);
-                        }
+                        notifyUser('Pond0x Claim', `Claim successful in manual mode: ${formatClaimValue(currentUnclaimedNum)} tokens. Awaiting user action...`);
                     }
 
-                    // Handle Claim + Wait mode
                     if (isClaimWaitMode && isAutoMode) {
                         console.log(`${lh} - Claim + Wait mode active, pausing for 20 minutes...`);
                         notifyUser('Pond0x Claim', `Claim successful: ${formatClaimValue(currentUnclaimedNum)} tokens. Waiting 20 minutes...`);
                         isPaused = true;
-                        await GM.setValue('pond0xMinerIsPaused', true); // Changed to unique key for AutoMiner
+                        await GM.setValue('pond0xMinerIsPaused', true);
                         document.getElementById('pauseResumeBtn').textContent = 'Resume';
                         document.getElementById('pauseResumeBtn').style.background = '#28a745';
                         document.getElementById('pauseResumeBtn').style.color = 'white';
                         await new Promise(resolve => setTimeout(resolve, getTimeMS(20 * 60)));
                         isPaused = false;
-                        await GM.setValue('pond0xMinerIsPaused', false); // Changed to unique key for AutoMiner
+                        await GM.setValue('pond0xMinerIsPaused', false);
                         document.getElementById('pauseResumeBtn').textContent = 'Pause';
                         document.getElementById('pauseResumeBtn').style.background = '#ffc107';
                         document.getElementById('pauseResumeBtn').style.color = 'black';
                     } else if (isAutoMode) {
-                        try {
-                            notifyUser('Pond0x Claim', `Claim successful: ${formatClaimValue(currentUnclaimedNum)} tokens`);
-                        } catch (error) {
-                            console.error(`${lh} - Failed to send notification: ${error.message}. Continuing...`);
-                        }
+                        notifyUser('Pond0x Claim', `Claim successful: ${formatClaimValue(currentUnclaimedNum)} tokens`);
                     }
 
                     lastStatusCheckTime = 0;
@@ -1452,25 +1380,17 @@
                     reloadReason = isClaimWaitMode ? 'Claim + Wait 20 Mins' : (timeSinceStart > effectiveClaimIntervalSeconds ? 'Time Threshold Claim' : 'Smart Claim');
                     await GM.setValue('pond0xPageReloads', pageReloads);
                     await GM.setValue('pond0xReloadReason', reloadReason);
-                    console.log(`${lh} - Updated reload reason to ${reloadReason} after claim`);
-
-                    // Reload page to start next session (Auto Mode) or wait for user interaction (Manual Mode)
                     console.log(`${lh} - Reloading page after claim...`);
-                    sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
+                    sessionStorage.setItem('pond0xReloaded', 'true');
                     window.location.href = 'https://www.pond0x.com/mining';
-                    return; // Exit the run loop to prevent further actions
+                    return;
                 } else {
                     console.warn(`${lh} - No claim button found for smart/time-based claim`);
-                    try {
-                        notifyUser('Pond0x Warning', 'No claim button found for smart/time-based claim');
-                    } catch (error) {
-                        console.error(`${lh} - Failed to send notification: ${error.message}. Continuing...`);
-                    }
+                    notifyUser('Pond0x Warning', 'No claim button found for smart/time-based claim');
                 }
             }
         }
 
-        // Schedule the next run if no immediate action was taken
         runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval));
     };
     // [Start of Part 5]
@@ -1795,12 +1715,12 @@
     // Main execution
     console.log(`${lh} - Starting monitoring cycle (waiting for manual start if first run)...`);
     await performDailyReset();
-    await createClaimSummaryBox(); // Explicitly call to ensure summary box appears early
+    await createClaimSummaryBox();
     await createControlPanel();
     if (isAutoMode) {
-        scheduleStatusCheck();
+        await scheduleStatusCheck(); // Initial status check for Auto Mode
     } else {
-        await run();
+        await run(); // Start run loop for Manual Mode
     }
 
     // Add event listener for page reloads
