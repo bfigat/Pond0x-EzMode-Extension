@@ -130,7 +130,7 @@
     let isMiningActive = false;
     let isMiningRunning = false;
     let isClaiming = false;
-    let statusLock = false;
+    let statusLock = false; // This will be reset on reload
     let lastStatusCheckTime = 0;
     let pageReloads = 0;
     let lastClaimValue = 0;
@@ -163,6 +163,13 @@
     let lastRenderedTotalClaimed;
     let lastRenderedLastClaim;
     let isClaimWaitMode; // New variable for Claim + Wait mode
+
+    // Reset statusLock on script initialization if a reload occurred
+    if (sessionStorage.getItem('pond0xReloaded')) {
+        statusLock = false;
+        console.log(`${lh} - Reset statusLock due to page reload`);
+        sessionStorage.removeItem('pond0xReloaded'); // Clean up
+    }
 
     // Async function to initialize variables that depend on GM.getValue
     const initializeVariables = async () => {
@@ -822,7 +829,7 @@
 
             if (!pollingStarted) {
                 console.warn(`${lh} - Status polling failed to start. Retrying in 5 seconds...`);
-                statusLock = false;
+                statusLock = false; // Reset statusLock on failure
                 setTimeout(() => checkMiningStatus().then(resolve), 5000);
                 resolve(false);
                 return;
@@ -855,25 +862,25 @@
                 if (status === 'Mining: Active' && !isMiningRunning && !startedMining && !isPaused) { // Added !isPaused check
                     startedMining = true;
                     console.log(`${lh} - Global mining active. Starting session and stopping polling...`);
+                    // Stop polling after successful mining start
+                    chrome.runtime.sendMessage({ type: 'stopStatusPolling' }, (response) => {
+                        if (chrome.runtime.lastError) {
+                            console.error(`${lh} - Failed to send stopStatusPolling message: ${chrome.runtime.lastError.message}`);
+                        } else {
+                            console.log(`${lh} - Stopped status polling successfully`);
+                        }
+                    });
+                    // Close the status-mini tab after mining starts
+                    chrome.runtime.sendMessage({ type: 'closeStatusTab' }, (response) => {
+                        if (chrome.runtime.lastError) {
+                            console.error(`${lh} - Failed to send closeStatusTab message: ${chrome.runtime.lastError.message}`);
+                        } else {
+                            console.log(`${lh} - Status-mini tab closed successfully`);
+                        }
+                    });
+                    chrome.runtime.onMessage.removeListener(handler);
+                    statusLock = false; // Reset statusLock before starting mining
                     startMining().then(() => {
-                        // Stop polling after successful mining start
-                        chrome.runtime.sendMessage({ type: 'stopStatusPolling' }, (response) => {
-                            if (chrome.runtime.lastError) {
-                                console.error(`${lh} - Failed to send stopStatusPolling message: ${chrome.runtime.lastError.message}`);
-                            } else {
-                                console.log(`${lh} - Stopped status polling successfully`);
-                            }
-                        });
-                        // Close the status-mini tab after mining starts
-                        chrome.runtime.sendMessage({ type: 'closeStatusTab' }, (response) => {
-                            if (chrome.runtime.lastError) {
-                                console.error(`${lh} - Failed to send closeStatusTab message: ${chrome.runtime.lastError.message}`);
-                            } else {
-                                console.log(`${lh} - Status-mini tab closed successfully`);
-                            }
-                        });
-                        chrome.runtime.onMessage.removeListener(handler);
-                        statusLock = false;
                         resolve(true);
                     }).catch((error) => {
                         console.error(`${lh} - Error starting mining: ${error.message}`);
@@ -890,8 +897,7 @@
                                 console.log(`${lh} - Status-mini tab closed successfully after mining failure`);
                             }
                         });
-                        chrome.runtime.onMessage.removeListener(handler);
-                        statusLock = false;
+                        statusLock = false; // Ensure statusLock is reset on failure
                         resolve(false);
                     });
                 }
@@ -903,10 +909,7 @@
     };
 
     const startMining = async () => {
-        if (statusLock) {
-            console.log(`${lh} - Start mining skipped: statusLock=${statusLock}`);
-            return;
-        }
+        // Removed the statusLock check since it's already handled in checkMiningStatus
         statusLock = true;
 
         // Track retries for Auto Mode
@@ -930,6 +933,7 @@
             reloadReason = 'Mine Button Not Found (Auto Mode)';
             await GM.setValue('pond0xPageReloads', pageReloads);
             await GM.setValue('pond0xReloadReason', reloadReason);
+            sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
             window.location.href = 'https://www.pond0x.com/mining';
             statusLock = false;
             return;
@@ -943,6 +947,7 @@
             reloadReason = 'Mine Button Not Found (Manual Mode)';
             await GM.setValue('pond0xPageReloads', pageReloads);
             await GM.setValue('pond0xReloadReason', reloadReason);
+            sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
             window.location.href = 'https://www.pond0x.com/mining';
             statusLock = false;
             return;
@@ -1015,6 +1020,7 @@
                     reloadReason = 'Invalid Unclaimed Value Reload';
                     await GM.setValue('pond0xPageReloads', pageReloads);
                     await GM.setValue('pond0xReloadReason', reloadReason);
+                    sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
                     console.log(`${lh} - Reloading page due to invalid unclaimed value...`);
                     window.location.href = 'https://www.pond0x.com/mining';
                     return;
@@ -1095,6 +1101,7 @@
                 reloadReason = 'Network Disconnection Recovery';
                 await GM.setValue('pond0xPageReloads', pageReloads);
                 await GM.setValue('pond0xReloadReason', reloadReason);
+                sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
                 window.location.href = 'https://www.pond0x.com/mining';
                 return;
             } else {
@@ -1305,6 +1312,7 @@
                 console.log(`${lh} - Updated reload reason to ${reloadReason} after hash rate zero claim`);
 
                 console.log(`${lh} - Reloading page to start next session...`);
+                sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
                 window.location.href = 'https://www.pond0x.com/mining';
                 return; // Exit the run loop to prevent further actions
             } else {
@@ -1324,6 +1332,7 @@
             reloadReason = 'Invalid Unclaimed Value Reload';
             await GM.setValue('pond0xPageReloads', pageReloads);
             await GM.setValue('pond0xReloadReason', reloadReason);
+            sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
             window.location.href = 'https://www.pond0x.com/mining';
             return;
         }
@@ -1426,6 +1435,7 @@
 
                     // Reload page to start next session (Auto Mode) or wait for user interaction (Manual Mode)
                     console.log(`${lh} - Reloading page after claim...`);
+                    sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
                     window.location.href = 'https://www.pond0x.com/mining';
                     return; // Exit the run loop to prevent further actions
                 } else {
