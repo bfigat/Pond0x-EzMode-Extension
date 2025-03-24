@@ -1052,7 +1052,7 @@
         statusLock = false;
     };
 
-    const scheduleStatusCheck = async () => {
+        const scheduleStatusCheck = async () => {
         if (isPaused || isMiningRunning) {
             console.log(`${lh} - Status check skipped: isPaused=${isPaused}, isMiningRunning=${isMiningRunning}`);
             return;
@@ -1066,13 +1066,18 @@
             return;
         }
         lastStatusCheckTime = now;
-        await checkMiningStatus();
+        if (document.readyState === 'complete') { // Ensure page is fully loaded before checking status
+            await checkMiningStatus();
+        } else {
+            console.log(`${lh} - Page not fully loaded, delaying status check...`);
+            setTimeout(scheduleStatusCheck, 1000); // Retry after 1 second if page isn’t ready
+        }
         if (!isMiningRunning) {
             setTimeout(scheduleStatusCheck, MIN_CHECK_INTERVAL * 1000); // Only reschedule if mining isn’t active
         }
     };
 
-    const run = async () => {
+        const run = async () => {
         if (!isAutoMode && !isMiningRunning && !autominerManuallyStarted) {
             console.log(`${lh} - Manual mode inactive, awaiting user start. Skipping run cycle...`);
             runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval)); // Reschedule even in idle state
@@ -1163,11 +1168,11 @@
             return;
         }
 
-        // Auto mode: Check global mining status only if not already running or on page reload
+        // Auto mode: Check global mining status only if not already running, but not immediately after reload
         if (isAutoMode && !isMiningRunning) {
-            if (getTime() - lastStatusCheckTime >= 30 || lastStatusCheckTime === 0 || pageReloads > 0) {
+            if (getTime() - lastStatusCheckTime >= 30 || lastStatusCheckTime === 0) { // Removed pageReloads > 0 condition
                 lastStatusCheckTime = getTime();
-                console.log(`${lh} - Starting status check at ${new Date().toISOString()} due to ${lastStatusCheckTime === 0 ? 'initial run' : pageReloads > 0 ? 'page reload' : '30-second interval'}`);
+                console.log(`${lh} - Starting status check at ${new Date().toISOString()} due to ${lastStatusCheckTime === 0 ? 'initial run' : '30-second interval'}`);
                 isMiningActive = await checkMiningStatus();
                 if (isMiningActive) {
                     consecutiveStoppedCount = 0;
@@ -1417,7 +1422,7 @@
         console.log(`${lh} - Scheduling next run cycle in ${window.pond0xO.runInterval} seconds...`);
         runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval));
     };
-    // [Start of Part 5]
+        // [Start of Part 5]
     // Part 5 includes remaining utility functions and main execution
 
     const resetDailyStats = async () => {
@@ -1736,15 +1741,25 @@
         }
     };
 
-    // Main execution
+        // Main execution
     console.log(`${lh} - Starting monitoring cycle (waiting for manual start if first run)...`);
     await performDailyReset();
     await createClaimSummaryBox();
     await createControlPanel();
     if (isAutoMode) {
-        await scheduleStatusCheck(); // Initial status check for Auto Mode
+        // Delay initial status check to allow page to stabilize after load/reload
+        console.log(`${lh} - Delaying initial status check by 5 seconds to ensure page stability...`);
+        setTimeout(async () => {
+            if (!isMiningRunning) { // Only proceed if mining hasn’t started yet
+                await waitForPageLoad(); // Ensure page is fully loaded before proceeding
+                await scheduleStatusCheck();
+            } else {
+                console.log(`${lh} - Mining already running, starting run loop directly...`);
+                run();
+            }
+        }, 5000); // 5-second delay
     } else {
-        await run(); // Start run loop for Manual Mode
+        await run(); // Start run loop for Manual Mode immediately
     }
 
     // Add event listener for page reloads
