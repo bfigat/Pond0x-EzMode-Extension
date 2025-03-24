@@ -806,7 +806,7 @@
             isControlPanelReady = true;
         }
     };
-    // [Start of Part 4]
+            // [Start of Part 4]
     // Part 4 includes the mining logic functions: checkMiningStatus, startMining, scheduleStatusCheck, run
 
     const checkMiningStatus = async () => {
@@ -888,6 +888,8 @@
                     chrome.runtime.onMessage.removeListener(handler);
                     statusLock = false;
                     startMining().then(() => {
+                        console.log(`${lh} - Mining started successfully, initiating run loop...`);
+                        run(); // Start the run loop immediately after mining begins
                         resolve(true);
                     }).catch((error) => {
                         console.error(`${lh} - Error starting mining: ${error.message}`);
@@ -1073,17 +1075,33 @@
     const run = async () => {
         if (!isAutoMode && !isMiningRunning && !autominerManuallyStarted) {
             console.log(`${lh} - Manual mode inactive, awaiting user start. Skipping run cycle...`);
+            runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval)); // Reschedule even in idle state
             return;
         }
 
         if (isPaused) {
             console.log(`${lh} - Autominer paused. Waiting to resume...`);
             nextRetryTime = null;
+            runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval)); // Keep loop alive
             return;
         }
 
-        console.log(`${lh} - Run cycle state: hashrate=${parseFloat(getLCDParams().hashrate) || 0}h/s, autominerManuallyStarted=${autominerManuallyStarted}, claimCount=${claimCount}, isAutoMode=${isAutoMode}, pageReloads=${pageReloads}, isClaimWaitMode=${isClaimWaitMode}`);
+        // Always log the current state for debugging and monitoring
+        let lcdContainer = document.querySelector('.screenshadow') ||
+                          document.querySelector('.bg-\\[\\#414f76\\]') ||
+                          document.querySelector('.mining-display') ||
+                          document.querySelector('.lcd-container') ||
+                          document.querySelector('.mining-section') ||
+                          document.querySelector('[class*="mining"]');
+        const params = lcdContainer ? getLCDParams() : { hashrate: '0', unclaimed: '' };
+        let hashrate = parseFloat(params.hashrate) || 0;
+        const currentUnclaimed = (params.unclaimed || '').trim().toLowerCase();
+        const runTime = getTime();
+        const timeSinceStart = window.pond0xO.startTime ? (runTime - window.pond0xO.startTime) : 0;
 
+        console.log(`${lh} - Run cycle state: hashrate=${hashrate}h/s, unclaimed=${currentUnclaimed}, autominerManuallyStarted=${autominerManuallyStarted}, claimCount=${claimCount}, isAutoMode=${isAutoMode}, pageReloads=${pageReloads}, isClaimWaitMode=${isClaimWaitMode}, timeSinceStart=${timeSinceStart}s`);
+
+        // Check network status
         const isOnline = navigator.onLine;
         if (!isOnline) {
             console.warn(`${lh} - Network disconnected. Attempting to recover...`);
@@ -1097,24 +1115,13 @@
                 await GM.setValue('pond0xReloadReason', reloadReason);
                 sessionStorage.setItem('pond0xReloaded', 'true');
                 window.location.href = 'https://www.pond0x.com/mining';
-                return;
+                return; // Exit to prevent rescheduling until reload completes
             } else {
                 console.log(`${lh} - Network reconnected. Continuing...`);
             }
         }
 
-        let lcdContainer = document.querySelector('.screenshadow') ||
-                          document.querySelector('.bg-\\[\\#414f76\\]') ||
-                          document.querySelector('.mining-display') ||
-                          document.querySelector('.lcd-container') ||
-                          document.querySelector('.mining-section') ||
-                          document.querySelector('[class*="mining"]');
-        const params = lcdContainer ? getLCDParams() : { hashrate: '0', unclaimed: '' };
-        let hashrate = parseFloat(params.hashrate) || 0;
-        const currentUnclaimed = (params.unclaimed || '').trim().toLowerCase();
-        const runTime = getTime();
-        const timeSinceStart = window.pond0xO.startTime ? (runTime - window.pond0xO.startTime) : 0;
-
+        // Retry hash rate check if it drops unexpectedly (possible network issue)
         if (hashrate === 0 && lcdContainer && isMiningRunning) {
             console.warn(`${lh} - Hash rate dropped to 0 unexpectedly. Retrying to confirm...`);
             let retryAttempts = 0;
@@ -1134,7 +1141,8 @@
             }
         }
 
-        if (hashrate > 0) {
+        // Update mining status and UI if hashrate > 0
+        if (hashrate > 0 && isMiningRunning) {
             if (!window.pond0xO.startTime) {
                 window.pond0xO.startTime = runTime;
             }
@@ -1155,6 +1163,7 @@
             return;
         }
 
+        // Auto mode: Check global mining status only if not already running or on page reload
         if (isAutoMode && !isMiningRunning) {
             if (getTime() - lastStatusCheckTime >= 30 || lastStatusCheckTime === 0 || pageReloads > 0) {
                 lastStatusCheckTime = getTime();
@@ -1178,6 +1187,7 @@
             await startMining();
         }
 
+        // Validate unclaimed value (only if LCD is available)
         let currentUnclaimedNum = 0;
         if (lcdContainer && currentUnclaimed && !['100k', '1m', '1.1m'].includes(currentUnclaimed)) {
             currentUnclaimedNum = parseFloat(currentUnclaimed.replace('m', '')) || 0;
@@ -1188,6 +1198,7 @@
             }
         }
 
+        // Determine which button to look for based on unclaimed value
         const buttons = {
             stop: currentUnclaimedNum < 100000000 ? searchNodeByContent('button', 'STOP ANYWAYS') : null,
             claim: searchNodeByContent('button', 'STOP & Claim')
@@ -1211,9 +1222,10 @@
         const effectiveClaimIntervalSeconds = Math.min(claimIntervalMinutes * 60, 150 * 60);
         console.log(`${lh} - Effective claim interval: ${effectiveClaimIntervalSeconds / 60} minutes (user-set: ${claimIntervalMinutes} minutes)`);
 
+        // Priority 1: Claim and reload if hash rate is 0
         if (lcdContainer && hashrate === 0 && (buttons.stop || buttons.claim)) {
             console.log(`${lh} - Hash rate is 0, initiating claim and reload...`);
-            const claimButton = buttons.claim || buttons.stop;
+            const claimButton = buttons.claim || buttons.stop; // Prefer "STOP & Claim" if available
             if (claimButton) {
                 isClaiming = true;
                 lastClaimTime = getTime();
@@ -1228,8 +1240,9 @@
 
                 console.log(`${lh} - Clicking ${claimButton.textContent} due to hash rate 0...`);
                 claimButton.click();
-                await new Promise(resolve => setTimeout(resolve, getTimeMS(6)));
+                await new Promise(resolve => setTimeout(resolve, getTimeMS(6))); // Wait for claim to process
 
+                // Update claim stats
                 claimCount++;
                 totalClaimed += currentUnclaimedNum;
                 lastClaimValue = currentUnclaimedNum;
@@ -1238,6 +1251,7 @@
                 await GM.setValue('pond0xTotalClaimed', totalClaimed);
                 await GM.setValue('pond0xLastClaim', lastClaimValue);
 
+                // Reset mining state
                 isMiningRunning = false;
                 await GM.setValue('pond0xIsMiningRunning', false);
                 window.pond0xO.startTime = null;
@@ -1247,6 +1261,7 @@
                     if (runTimeout) {
                         clearTimeout(runTimeout);
                         runTimeout = null;
+                        console.log(`${lh} - Cleared runTimeout in manual mode after claim`);
                     }
                     const toggleMiningBtn = document.getElementById('toggleMiningBtn');
                     if (toggleMiningBtn) {
@@ -1256,6 +1271,7 @@
                     notifyUser('Pond0x Claim', `Claim successful in manual mode: ${formatClaimValue(currentUnclaimedNum)} tokens. Awaiting user action...`);
                 }
 
+                // Handle Claim + Wait mode
                 if (isClaimWaitMode && isAutoMode) {
                     console.log(`${lh} - Claim + Wait mode active, pausing for 20 minutes...`);
                     notifyUser('Pond0x Claim', `Claim successful due to hash rate 0: ${formatClaimValue(currentUnclaimedNum)} tokens. Waiting 20 minutes...`);
@@ -1282,13 +1298,14 @@
                 console.log(`${lh} - Reloading page to start next session...`);
                 sessionStorage.setItem('pond0xReloaded', 'true');
                 window.location.href = 'https://www.pond0x.com/mining';
-                return;
+                return; // Exit to prevent rescheduling until reload completes
             } else {
                 console.warn(`${lh} - No claim button found despite hash rate 0 after retries`);
                 notifyUser('Pond0x Warning', 'No claim button found despite hash rate 0');
             }
         }
 
+        // Skip reload if unclaimed value is invalid (only if LCD is available)
         if (lcdContainer && ['100k', '1m', '1.1m'].includes(currentUnclaimed)) {
             console.warn(`${lh} - Detected invalid unclaimed value ${currentUnclaimed}, reloading page...`);
             pageReloads++;
@@ -1297,16 +1314,17 @@
             await GM.setValue('pond0xReloadReason', reloadReason);
             sessionStorage.setItem('pond0xReloaded', 'true');
             window.location.href = 'https://www.pond0x.com/mining';
-            return;
+            return; // Exit to prevent rescheduling until reload completes
         }
 
+        // Priority 2: Smart claim or time-based claim if hash rate is not 0 and conditions are met
         if (lcdContainer && hashrate > 0 && (buttons.stop || buttons.claim)) {
             const shouldClaim =
-                timeSinceStart > effectiveClaimIntervalSeconds ||
-                (isSmartClaimEnabled && currentUnclaimedNum >= smartClaimThreshold);
+                timeSinceStart > effectiveClaimIntervalSeconds || // Enforce effective claim interval (capped at 150 minutes)
+                (isSmartClaimEnabled && currentUnclaimedNum >= smartClaimThreshold); // Smart Claim when enabled and threshold met
 
             if (shouldClaim) {
-                const claimButton = buttons.claim || buttons.stop;
+                const claimButton = buttons.claim || buttons.stop; // Prefer "STOP & Claim" if available
                 if (claimButton) {
                     if (currentUnclaimedNum <= 0) {
                         console.warn(`${lh} - Skipping claim due to invalid unclaimed amount: ${currentUnclaimed}`);
@@ -1329,8 +1347,9 @@
                         : `smart claim threshold (${formatClaimValue(smartClaimThreshold)})`; 
                     console.log(`${lh} - Clicking ${claimButton.textContent} due to ${claimReason}...`);
                     claimButton.click();
-                    await new Promise(resolve => setTimeout(resolve, getTimeMS(6)));
+                    await new Promise(resolve => setTimeout(resolve, getTimeMS(6))); // Wait for claim to process
 
+                    // Update claim stats
                     claimCount++;
                     totalClaimed += currentUnclaimedNum;
                     lastClaimValue = currentUnclaimedNum;
@@ -1339,6 +1358,7 @@
                     await GM.setValue('pond0xTotalClaimed', totalClaimed);
                     await GM.setValue('pond0xLastClaim', lastClaimValue);
 
+                    // Reset mining state
                     isMiningRunning = false;
                     await GM.setValue('pond0xIsMiningRunning', false);
                     window.pond0xO.startTime = null;
@@ -1348,6 +1368,7 @@
                         if (runTimeout) {
                             clearTimeout(runTimeout);
                             runTimeout = null;
+                            console.log(`${lh} - Cleared runTimeout in manual mode after claim`);
                         }
                         const toggleMiningBtn = document.getElementById('toggleMiningBtn');
                         if (toggleMiningBtn) {
@@ -1357,6 +1378,7 @@
                         notifyUser('Pond0x Claim', `Claim successful in manual mode: ${formatClaimValue(currentUnclaimedNum)} tokens. Awaiting user action...`);
                     }
 
+                    // Handle Claim + Wait mode
                     if (isClaimWaitMode && isAutoMode) {
                         console.log(`${lh} - Claim + Wait mode active, pausing for 20 minutes...`);
                         notifyUser('Pond0x Claim', `Claim successful: ${formatClaimValue(currentUnclaimedNum)} tokens. Waiting 20 minutes...`);
@@ -1383,7 +1405,7 @@
                     console.log(`${lh} - Reloading page after claim...`);
                     sessionStorage.setItem('pond0xReloaded', 'true');
                     window.location.href = 'https://www.pond0x.com/mining';
-                    return;
+                    return; // Exit to prevent rescheduling until reload completes
                 } else {
                     console.warn(`${lh} - No claim button found for smart/time-based claim`);
                     notifyUser('Pond0x Warning', 'No claim button found for smart/time-based claim');
@@ -1391,6 +1413,8 @@
             }
         }
 
+        // Schedule the next run regardless of action taken, unless a reload occurred
+        console.log(`${lh} - Scheduling next run cycle in ${window.pond0xO.runInterval} seconds...`);
         runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval));
     };
     // [Start of Part 5]
