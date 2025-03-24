@@ -182,6 +182,7 @@
 
     // Async function to initialize variables that depend on GM.getValue
         // Async function to initialize variables that depend on GM.getValue
+        // Async function to initialize variables that depend on GM.getValue
     const initializeVariables = async () => {
         lastClaimTime = await GM.getValue('pond0xLastClaimTime', 0);
         reloadReason = await GM.getValue('pond0xReloadReason', 'Initial Load');
@@ -202,6 +203,7 @@
         smartClaimUnit = await GM.getValue('pond0xSmartClaimUnit', 'Million');
         isSmartClaimEnabled = await GM.getValue('pond0xIsSmartClaimEnabled', false);
         isClaimWaitMode = await GM.getValue('pond0xIsClaimWaitMode', false);
+        currentGlobalStatus = await GM.getValue('pond0xCurrentGlobalStatus', 'Unknown'); // Persist status
 
         // Post-initialization adjustments
         lastRenderedTotalClaimed = totalClaimed;
@@ -220,9 +222,9 @@
             lastClaimValue = lastClaimStored;
         }
 
-        pageReloads = pageReloadsStored; // Don’t increment here; let claim logic handle it
+        pageReloads = pageReloadsStored;
         await GM.setValue('pond0xPageReloads', pageReloads);
-        console.log(`${lh} - Initialized variables: claimCount=${claimCount}, totalClaimed=${totalClaimed}, lastClaimValue=${lastClaimValue}, pageReloads=${pageReloads}`);
+        console.log(`${lh} - Initialized variables: claimCount=${claimCount}, totalClaimed=${totalClaimed}, lastClaimValue=${lastClaimValue}, pageReloads=${pageReloads}, currentGlobalStatus=${currentGlobalStatus}`);
     };
     await initializeVariables();
 
@@ -808,7 +810,7 @@
             isControlPanelReady = true;
         }
     };
-            // [Start of Part 4]
+               // [Start of Part 4]
     // Part 4 includes the mining logic functions: checkMiningStatus, startMining, scheduleStatusCheck, run
 
     const checkMiningStatus = async () => {
@@ -862,6 +864,11 @@
                     lastStatus = status;
                 }
                 currentGlobalStatus = status;
+                try {
+                    GM.setValue('pond0xCurrentGlobalStatus', currentGlobalStatus); // Persist status
+                } catch (e) {
+                    console.error(`${lh} - Failed to save currentGlobalStatus: ${e.message}`);
+                }
 
                 miningStatuses.push({ status, time: getTime() });
                 if (miningStatuses.length > 10) miningStatuses.shift();
@@ -891,7 +898,7 @@
                     statusLock = false;
                     startMining().then(() => {
                         console.log(`${lh} - Mining started successfully, initiating run loop...`);
-                        run(); // Start the run loop immediately after mining begins
+                        run();
                         resolve(true);
                     }).catch((error) => {
                         console.error(`${lh} - Error starting mining: ${error.message}`);
@@ -904,6 +911,7 @@
                             }
                         });
                         statusLock = false;
+                        setTimeout(() => checkMiningStatus().then(resolve), 5000); // Retry on failure
                         resolve(false);
                     });
                 }
@@ -1054,7 +1062,7 @@
         statusLock = false;
     };
 
-        const scheduleStatusCheck = async () => {
+    const scheduleStatusCheck = async () => {
         if (isPaused || isMiningRunning) {
             console.log(`${lh} - Status check skipped: isPaused=${isPaused}, isMiningRunning=${isMiningRunning}`);
             return;
@@ -1079,17 +1087,21 @@
         }
     };
 
-            const run = async () => {
+    const run = async () => {
         if (!isAutoMode && !isMiningRunning && !autominerManuallyStarted) {
             console.log(`${lh} - Manual mode inactive, awaiting user start. Skipping run cycle...`);
-            runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval)); // Reschedule even in idle state
+            if (!runTimeout) {
+                runTimeout = setInterval(run, getTimeMS(window.pond0xO.runInterval));
+            }
             return;
         }
 
         if (isPaused) {
             console.log(`${lh} - Autominer paused. Waiting to resume...`);
             nextRetryTime = null;
-            runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval)); // Keep loop alive
+            if (!runTimeout) {
+                runTimeout = setInterval(run, getTimeMS(window.pond0xO.runInterval));
+            }
             return;
         }
 
@@ -1118,11 +1130,15 @@
                 console.error(`${lh} - Network still disconnected. Reloading page to recover...`);
                 pageReloads++;
                 reloadReason = 'Network Disconnection Recovery';
-                await GM.setValue('pond0xPageReloads', pageReloads);
-                await GM.setValue('pond0xReloadReason', reloadReason);
+                try {
+                    await GM.setValue('pond0xPageReloads', pageReloads);
+                    await GM.setValue('pond0xReloadReason', reloadReason);
+                } catch (e) {
+                    console.error(`${lh} - Failed to save reload data: ${e.message}`);
+                }
                 sessionStorage.setItem('pond0xReloaded', 'true');
                 window.location.href = 'https://www.pond0x.com/mining';
-                return; // Exit to prevent rescheduling until reload completes
+                return;
             } else {
                 console.log(`${lh} - Network reconnected. Continuing...`);
             }
@@ -1163,16 +1179,22 @@
                 await updateClaimSummaryBox();
             }
             isMiningRunning = true;
-            await GM.setValue('pond0xIsMiningRunning', true);
+            try {
+                await GM.setValue('pond0xIsMiningRunning', true);
+            } catch (e) {
+                console.error(`${lh} - Failed to update isMiningRunning: ${e.message}`);
+            }
         } else if (!autominerManuallyStarted && claimCount === 0 && pageReloads === 0) {
             console.log(`${lh} - No hashrate detected and first run, waiting for manual start...`);
-            runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval));
+            if (!runTimeout) {
+                runTimeout = setInterval(run, getTimeMS(window.pond0xO.runInterval));
+            }
             return;
         }
 
-        // Auto mode: Check global mining status only if not already running, but not immediately after reload
+        // Auto mode: Check global mining status if not running, with retry on failure
         if (isAutoMode && !isMiningRunning) {
-            if (getTime() - lastStatusCheckTime >= 30 || lastStatusCheckTime === 0) { // Removed pageReloads > 0 condition
+            if (getTime() - lastStatusCheckTime >= 30 || lastStatusCheckTime === 0) {
                 lastStatusCheckTime = getTime();
                 console.log(`${lh} - Starting status check at ${new Date().toISOString()} due to ${lastStatusCheckTime === 0 ? 'initial run' : '30-second interval'}`);
                 isMiningActive = await checkMiningStatus();
@@ -1186,9 +1208,14 @@
                     const retryDelay = consecutiveStoppedCount >= 3 ? 300000 : 5000;
                     nextRetryTime = getTime() + (retryDelay / 1000);
                     console.log(`${lh} - Retrying status check in ${retryDelay / 1000}s...`);
-                    runTimeout = setTimeout(run, retryDelay);
+                    if (!runTimeout) {
+                        runTimeout = setInterval(run, retryDelay);
+                    }
                     return;
                 }
+            } else if (currentGlobalStatus === 'Mining: Active') {
+                console.log(`${lh} - Restoring mining from persisted status: ${currentGlobalStatus}`);
+                await startMining(); // Use persisted status if recent check not due
             }
         } else if (!isAutoMode && !hashrate && !isMiningRunning) {
             await startMining();
@@ -1236,14 +1263,22 @@
             if (claimButton) {
                 isClaiming = true;
                 lastClaimTime = getTime();
-                await GM.setValue('pond0xLastClaimTime', lastClaimTime);
-                claimTimes.push(lastClaimTime);
-                await GM.setValue('pond0xClaimTimes', JSON.stringify(claimTimes));
-                await GM.setValue('pond0xLastClaimTime', lastClaimTime);
+                try {
+                    await GM.setValue('pond0xLastClaimTime', lastClaimTime);
+                    claimTimes.push(lastClaimTime);
+                    await GM.setValue('pond0xClaimTimes', JSON.stringify(claimTimes));
+                    await GM.setValue('pond0xLastClaimTime', lastClaimTime);
+                } catch (e) {
+                    console.error(`${lh} - Failed to save claim time data: ${e.message}`);
+                }
 
                 historicalClaims.push({ date: lastClaimTime, amount: currentUnclaimedNum });
                 await updateDailyClaims(lastClaimTime, currentUnclaimedNum);
-                await GM.setValue('pond0xHistoricalClaims', JSON.stringify(historicalClaims.slice(-100)));
+                try {
+                    await GM.setValue('pond0xHistoricalClaims', JSON.stringify(historicalClaims.slice(-100)));
+                } catch (e) {
+                    console.error(`${lh} - Failed to save historical claims: ${e.message}`);
+                }
 
                 console.log(`${lh} - Clicking ${claimButton.textContent} due to hash rate 0...`);
                 claimButton.click();
@@ -1254,9 +1289,13 @@
                 totalClaimed += currentUnclaimedNum;
                 lastClaimValue = currentUnclaimedNum;
                 console.log(`${lh} - Updated totalClaimed to ${totalClaimed}, lastClaimValue to ${lastClaimValue}`);
-                await GM.setValue('pond0xClaimCount', claimCount);
-                await GM.setValue('pond0xTotalClaimed', totalClaimed);
-                await GM.setValue('pond0xLastClaim', lastClaimValue);
+                try {
+                    await GM.setValue('pond0xClaimCount', claimCount);
+                    await GM.setValue('pond0xTotalClaimed', totalClaimed);
+                    await GM.setValue('pond0xLastClaim', lastClaimValue);
+                } catch (e) {
+                    console.error(`${lh} - Failed to save claim stats: ${e.message}`);
+                }
 
                 // Update summary box before reload
                 await updateClaimSummaryBox();
@@ -1264,13 +1303,17 @@
 
                 // Reset mining state
                 isMiningRunning = false;
-                await GM.setValue('pond0xIsMiningRunning', false);
+                try {
+                    await GM.setValue('pond0xIsMiningRunning', false);
+                } catch (e) {
+                    console.error(`${lh} - Failed to reset isMiningRunning: ${e.message}`);
+                }
                 window.pond0xO.startTime = null;
 
                 if (!isAutoMode) {
                     console.log(`${lh} - Manual mode: Claim completed, stopping autominer...`);
                     if (runTimeout) {
-                        clearTimeout(runTimeout);
+                        clearInterval(runTimeout);
                         runTimeout = null;
                         console.log(`${lh} - Cleared runTimeout in manual mode after claim`);
                     }
@@ -1287,13 +1330,21 @@
                     console.log(`${lh} - Claim + Wait mode active, pausing for 20 minutes...`);
                     notifyUser('Pond0x Claim', `Claim successful due to hash rate 0: ${formatClaimValue(currentUnclaimedNum)} tokens. Waiting 20 minutes...`);
                     isPaused = true;
-                    await GM.setValue('pond0xMinerIsPaused', true);
+                    try {
+                        await GM.setValue('pond0xMinerIsPaused', true);
+                    } catch (e) {
+                        console.error(`${lh} - Failed to set pause state: ${e.message}`);
+                    }
                     document.getElementById('pauseResumeBtn').textContent = 'Resume';
                     document.getElementById('pauseResumeBtn').style.background = '#28a745';
                     document.getElementById('pauseResumeBtn').style.color = 'white';
                     await new Promise(resolve => setTimeout(resolve, getTimeMS(20 * 60)));
                     isPaused = false;
-                    await GM.setValue('pond0xMinerIsPaused', false);
+                    try {
+                        await GM.setValue('pond0xMinerIsPaused', false);
+                    } catch (e) {
+                        console.error(`${lh} - Failed to reset pause state: ${e.message}`);
+                    }
                     document.getElementById('pauseResumeBtn').textContent = 'Pause';
                     document.getElementById('pauseResumeBtn').style.background = '#ffc107';
                     document.getElementById('pauseResumeBtn').style.color = 'black';
@@ -1304,13 +1355,17 @@
                 lastStatusCheckTime = 0;
                 pageReloads++;
                 reloadReason = isClaimWaitMode ? 'Claim + Wait 20 Mins' : 'Hash Rate Zero Claim';
-                await GM.setValue('pond0xPageReloads', pageReloads);
-                await GM.setValue('pond0xReloadReason', reloadReason);
+                try {
+                    await GM.setValue('pond0xPageReloads', pageReloads);
+                    await GM.setValue('pond0xReloadReason', reloadReason);
+                } catch (e) {
+                    console.error(`${lh} - Failed to save reload data: ${e.message}`);
+                }
                 console.log(`${lh} - Reloading page to start next session in 2 seconds...`);
-                await new Promise(resolve => setTimeout(resolve, 2000)); // 2-second delay to ensure storage sync
+                await new Promise(resolve => setTimeout(resolve, 2000));
                 sessionStorage.setItem('pond0xReloaded', 'true');
                 window.location.href = 'https://www.pond0x.com/mining';
-                return; // Exit to prevent rescheduling until reload completes
+                return;
             } else {
                 console.warn(`${lh} - No claim button found despite hash rate 0 after retries`);
                 notifyUser('Pond0x Warning', 'No claim button found despite hash rate 0');
@@ -1322,15 +1377,18 @@
             console.warn(`${lh} - Detected invalid unclaimed value ${currentUnclaimed}, reloading page...`);
             pageReloads++;
             reloadReason = 'Invalid Unclaimed Value Reload';
-            await GM.setValue('pond0xPageReloads', pageReloads);
-            await GM.setValue('pond0xReloadReason', reloadReason);
-            // Update summary box before reload
+            try {
+                await GM.setValue('pond0xPageReloads', pageReloads);
+                await GM.setValue('pond0xReloadReason', reloadReason);
+            } catch (e) {
+                console.error(`${lh} - Failed to save reload data: ${e.message}`);
+            }
             await updateClaimSummaryBox();
             console.log(`${lh} - Summary box updated before reload due to invalid unclaimed value`);
-            await new Promise(resolve => setTimeout(resolve, 2000)); // 2-second delay to ensure storage sync
+            await new Promise(resolve => setTimeout(resolve, 2000));
             sessionStorage.setItem('pond0xReloaded', 'true');
             window.location.href = 'https://www.pond0x.com/mining';
-            return; // Exit to prevent rescheduling until reload completes
+            return;
         }
 
         // Priority 2: Smart claim or time-based claim if hash rate is not 0 and conditions are met
@@ -1344,19 +1402,29 @@
                 if (claimButton) {
                     if (currentUnclaimedNum <= 0) {
                         console.warn(`${lh} - Skipping claim due to invalid unclaimed amount: ${currentUnclaimed}`);
-                        runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval));
+                        if (!runTimeout) {
+                            runTimeout = setInterval(run, getTimeMS(window.pond0xO.runInterval));
+                        }
                         return;
                     }
                     isClaiming = true;
                     lastClaimTime = getTime();
-                    await GM.setValue('pond0xLastClaimTime', lastClaimTime);
-                    claimTimes.push(lastClaimTime);
-                    await GM.setValue('pond0xClaimTimes', JSON.stringify(claimTimes));
-                    await GM.setValue('pond0xLastClaimTime', lastClaimTime);
+                    try {
+                        await GM.setValue('pond0xLastClaimTime', lastClaimTime);
+                        claimTimes.push(lastClaimTime);
+                        await GM.setValue('pond0xClaimTimes', JSON.stringify(claimTimes));
+                        await GM.setValue('pond0xLastClaimTime', lastClaimTime);
+                    } catch (e) {
+                        console.error(`${lh} - Failed to save claim time data: ${e.message}`);
+                    }
 
                     historicalClaims.push({ date: lastClaimTime, amount: currentUnclaimedNum });
                     await updateDailyClaims(lastClaimTime, currentUnclaimedNum);
-                    await GM.setValue('pond0xHistoricalClaims', JSON.stringify(historicalClaims.slice(-100)));
+                    try {
+                        await GM.setValue('pond0xHistoricalClaims', JSON.stringify(historicalClaims.slice(-100)));
+                    } catch (e) {
+                        console.error(`${lh} - Failed to save historical claims: ${e.message}`);
+                    }
 
                     const claimReason = timeSinceStart > effectiveClaimIntervalSeconds
                         ? `time threshold (${effectiveClaimIntervalSeconds / 60} minutes)`
@@ -1370,9 +1438,13 @@
                     totalClaimed += currentUnclaimedNum;
                     lastClaimValue = currentUnclaimedNum;
                     console.log(`${lh} - Updated totalClaimed to ${totalClaimed}, lastClaimValue to ${lastClaimValue}`);
-                    await GM.setValue('pond0xClaimCount', claimCount);
-                    await GM.setValue('pond0xTotalClaimed', totalClaimed);
-                    await GM.setValue('pond0xLastClaim', lastClaimValue);
+                    try {
+                        await GM.setValue('pond0xClaimCount', claimCount);
+                        await GM.setValue('pond0xTotalClaimed', totalClaimed);
+                        await GM.setValue('pond0xLastClaim', lastClaimValue);
+                    } catch (e) {
+                        console.error(`${lh} - Failed to save claim stats: ${e.message}`);
+                    }
 
                     // Update summary box before reload
                     await updateClaimSummaryBox();
@@ -1380,13 +1452,17 @@
 
                     // Reset mining state
                     isMiningRunning = false;
-                    await GM.setValue('pond0xIsMiningRunning', false);
+                    try {
+                        await GM.setValue('pond0xIsMiningRunning', false);
+                    } catch (e) {
+                        console.error(`${lh} - Failed to reset isMiningRunning: ${e.message}`);
+                    }
                     window.pond0xO.startTime = null;
 
                     if (!isAutoMode) {
                         console.log(`${lh} - Manual mode: Claim completed, stopping autominer...`);
                         if (runTimeout) {
-                            clearTimeout(runTimeout);
+                            clearInterval(runTimeout);
                             runTimeout = null;
                             console.log(`${lh} - Cleared runTimeout in manual mode after claim`);
                         }
@@ -1403,13 +1479,21 @@
                         console.log(`${lh} - Claim + Wait mode active, pausing for 20 minutes...`);
                         notifyUser('Pond0x Claim', `Claim successful: ${formatClaimValue(currentUnclaimedNum)} tokens. Waiting 20 minutes...`);
                         isPaused = true;
-                        await GM.setValue('pond0xMinerIsPaused', true);
+                        try {
+                            await GM.setValue('pond0xMinerIsPaused', true);
+                        } catch (e) {
+                            console.error(`${lh} - Failed to set pause state: ${e.message}`);
+                        }
                         document.getElementById('pauseResumeBtn').textContent = 'Resume';
                         document.getElementById('pauseResumeBtn').style.background = '#28a745';
                         document.getElementById('pauseResumeBtn').style.color = 'white';
                         await new Promise(resolve => setTimeout(resolve, getTimeMS(20 * 60)));
                         isPaused = false;
-                        await GM.setValue('pond0xMinerIsPaused', false);
+                        try {
+                            await GM.setValue('pond0xMinerIsPaused', false);
+                        } catch (e) {
+                            console.error(`${lh} - Failed to reset pause state: ${e.message}`);
+                        }
                         document.getElementById('pauseResumeBtn').textContent = 'Pause';
                         document.getElementById('pauseResumeBtn').style.background = '#ffc107';
                         document.getElementById('pauseResumeBtn').style.color = 'black';
@@ -1420,13 +1504,17 @@
                     lastStatusCheckTime = 0;
                     pageReloads++;
                     reloadReason = isClaimWaitMode ? 'Claim + Wait 20 Mins' : (timeSinceStart > effectiveClaimIntervalSeconds ? 'Time Threshold Claim' : 'Smart Claim');
-                    await GM.setValue('pond0xPageReloads', pageReloads);
-                    await GM.setValue('pond0xReloadReason', reloadReason);
+                    try {
+                        await GM.setValue('pond0xPageReloads', pageReloads);
+                        await GM.setValue('pond0xReloadReason', reloadReason);
+                    } catch (e) {
+                        console.error(`${lh} - Failed to save reload data: ${e.message}`);
+                    }
                     console.log(`${lh} - Reloading page after claim in 2 seconds...`);
-                    await new Promise(resolve => setTimeout(resolve, 2000)); // 2-second delay to ensure storage sync
+                    await new Promise(resolve => setTimeout(resolve, 2000));
                     sessionStorage.setItem('pond0xReloaded', 'true');
                     window.location.href = 'https://www.pond0x.com/mining';
-                    return; // Exit to prevent rescheduling until reload completes
+                    return;
                 } else {
                     console.warn(`${lh} - No claim button found for smart/time-based claim`);
                     notifyUser('Pond0x Warning', 'No claim button found for smart/time-based claim');
@@ -1434,11 +1522,13 @@
             }
         }
 
-        // Schedule the next run regardless of action taken, unless a reload occurred
-        console.log(`${lh} - Scheduling next run cycle in ${window.pond0xO.runInterval} seconds...`);
-        runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval));
+        // Schedule the next run using interval if not already running
+        if (!runTimeout && isAutoMode) {
+            console.log(`${lh} - Scheduling next run cycle in ${window.pond0xO.runInterval} seconds...`);
+            runTimeout = setInterval(run, getTimeMS(window.pond0xO.runInterval));
+        }
     };
-        // [Start of Part 5]
+            // [Start of Part 5]
     // Part 5 includes remaining utility functions and main execution
 
     const resetDailyStats = async () => {
@@ -1757,29 +1847,61 @@
         }
     };
 
-        // Main execution
+    // Main execution
     console.log(`${lh} - Starting monitoring cycle (waiting for manual start if first run)...`);
     await performDailyReset();
     await createClaimSummaryBox();
     await createControlPanel();
+
+    // Ensure run loop starts and persists in Auto Mode
     if (isAutoMode) {
-        // Delay initial status check to allow page to stabilize after load/reload
-        console.log(`${lh} - Delaying initial status check by 5 seconds to ensure page stability...`);
+        console.log(`${lh} - Auto Mode enabled, starting persistent run loop with 10-second delay...`);
         setTimeout(async () => {
-            if (!isMiningRunning) { // Only proceed if mining hasn’t started yet
-                await waitForPageLoad(); // Ensure page is fully loaded before proceeding
-                await scheduleStatusCheck();
+            await waitForPageLoad(); // Ensure page is fully loaded
+            if (!isMiningRunning) {
+                console.log(`${lh} - Initializing status check with persisted status: ${currentGlobalStatus}`);
+                if (currentGlobalStatus === 'Mining: Active') {
+                    console.log(`${lh} - Restoring mining from persisted status...`);
+                    await startMining();
+                } else {
+                    await scheduleStatusCheck();
+                }
             } else {
                 console.log(`${lh} - Mining already running, starting run loop directly...`);
                 run();
             }
-        }, 5000); // 5-second delay
+            // Persistent restart mechanism
+            if (!runTimeout) {
+                runTimeout = setInterval(run, getTimeMS(window.pond0xO.runInterval));
+            }
+        }, 10000); // 10-second initial delay
     } else {
+        console.log(`${lh} - Manual Mode enabled, starting run loop...`);
         await run(); // Start run loop for Manual Mode immediately
     }
 
-    // Add event listener for page reloads
+    // Add event listener to restart on page interaction or reload
+    window.addEventListener('load', async () => {
+        if (isAutoMode && !runTimeout) {
+            console.log(`${lh} - Page reloaded, restarting run loop in Auto Mode...`);
+            runTimeout = setInterval(run, getTimeMS(window.pond0xO.runInterval));
+        }
+    });
+
+    window.addEventListener('focus', async () => {
+        if (isAutoMode && !runTimeout) {
+            console.log(`${lh} - Page focused, restarting run loop in Auto Mode...`);
+            runTimeout = setInterval(run, getTimeMS(window.pond0xO.runInterval));
+        }
+    });
+
+    // Save reload reason and status on unload
     window.addEventListener('beforeunload', async () => {
-        await GM.setValue('pond0xReloadReason', reloadReason || 'User Navigation');
+        try {
+            await GM.setValue('pond0xReloadReason', reloadReason || 'User Navigation');
+            await GM.setValue('pond0xCurrentGlobalStatus', currentGlobalStatus);
+        } catch (e) {
+            console.error(`${lh} - Failed to save reload data: ${e.message}`);
+        }
     });
 })();
