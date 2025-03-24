@@ -181,10 +181,11 @@
     }
 
     // Async function to initialize variables that depend on GM.getValue
+        // Async function to initialize variables that depend on GM.getValue
     const initializeVariables = async () => {
         lastClaimTime = await GM.getValue('pond0xLastClaimTime', 0);
         reloadReason = await GM.getValue('pond0xReloadReason', 'Initial Load');
-        isPaused = await GM.getValue('pond0xMinerIsPaused', false); // Changed to unique key for AutoMiner
+        isPaused = await GM.getValue('pond0xMinerIsPaused', false);
         isAutoMode = await GM.getValue('pond0xIsAutoMode', true);
         claimCount = await GM.getValue('pond0xClaimCount', 0);
         totalClaimed = await GM.getValue('pond0xTotalClaimed', 0);
@@ -200,7 +201,7 @@
         smartClaimThreshold = await GM.getValue('pond0xSmartClaimThreshold', 200000000);
         smartClaimUnit = await GM.getValue('pond0xSmartClaimUnit', 'Million');
         isSmartClaimEnabled = await GM.getValue('pond0xIsSmartClaimEnabled', false);
-        isClaimWaitMode = await GM.getValue('pond0xIsClaimWaitMode', false); // Initialize new variable
+        isClaimWaitMode = await GM.getValue('pond0xIsClaimWaitMode', false);
 
         // Post-initialization adjustments
         lastRenderedTotalClaimed = totalClaimed;
@@ -219,8 +220,9 @@
             lastClaimValue = lastClaimStored;
         }
 
-        pageReloads = pageReloadsStored + 1;
+        pageReloads = pageReloadsStored; // Don’t increment here; let claim logic handle it
         await GM.setValue('pond0xPageReloads', pageReloads);
+        console.log(`${lh} - Initialized variables: claimCount=${claimCount}, totalClaimed=${totalClaimed}, lastClaimValue=${lastClaimValue}, pageReloads=${pageReloads}`);
     };
     await initializeVariables();
 
@@ -1077,7 +1079,7 @@
         }
     };
 
-        const run = async () => {
+            const run = async () => {
         if (!isAutoMode && !isMiningRunning && !autominerManuallyStarted) {
             console.log(`${lh} - Manual mode inactive, awaiting user start. Skipping run cycle...`);
             runTimeout = setTimeout(run, getTimeMS(window.pond0xO.runInterval)); // Reschedule even in idle state
@@ -1256,6 +1258,10 @@
                 await GM.setValue('pond0xTotalClaimed', totalClaimed);
                 await GM.setValue('pond0xLastClaim', lastClaimValue);
 
+                // Update summary box before reload
+                await updateClaimSummaryBox();
+                console.log(`${lh} - Summary box updated with latest claim data before reload`);
+
                 // Reset mining state
                 isMiningRunning = false;
                 await GM.setValue('pond0xIsMiningRunning', false);
@@ -1300,7 +1306,8 @@
                 reloadReason = isClaimWaitMode ? 'Claim + Wait 20 Mins' : 'Hash Rate Zero Claim';
                 await GM.setValue('pond0xPageReloads', pageReloads);
                 await GM.setValue('pond0xReloadReason', reloadReason);
-                console.log(`${lh} - Reloading page to start next session...`);
+                console.log(`${lh} - Reloading page to start next session in 2 seconds...`);
+                await new Promise(resolve => setTimeout(resolve, 2000)); // 2-second delay to ensure storage sync
                 sessionStorage.setItem('pond0xReloaded', 'true');
                 window.location.href = 'https://www.pond0x.com/mining';
                 return; // Exit to prevent rescheduling until reload completes
@@ -1317,6 +1324,10 @@
             reloadReason = 'Invalid Unclaimed Value Reload';
             await GM.setValue('pond0xPageReloads', pageReloads);
             await GM.setValue('pond0xReloadReason', reloadReason);
+            // Update summary box before reload
+            await updateClaimSummaryBox();
+            console.log(`${lh} - Summary box updated before reload due to invalid unclaimed value`);
+            await new Promise(resolve => setTimeout(resolve, 2000)); // 2-second delay to ensure storage sync
             sessionStorage.setItem('pond0xReloaded', 'true');
             window.location.href = 'https://www.pond0x.com/mining';
             return; // Exit to prevent rescheduling until reload completes
@@ -1363,6 +1374,10 @@
                     await GM.setValue('pond0xTotalClaimed', totalClaimed);
                     await GM.setValue('pond0xLastClaim', lastClaimValue);
 
+                    // Update summary box before reload
+                    await updateClaimSummaryBox();
+                    console.log(`${lh} - Summary box updated with latest claim data before reload`);
+
                     // Reset mining state
                     isMiningRunning = false;
                     await GM.setValue('pond0xIsMiningRunning', false);
@@ -1407,7 +1422,8 @@
                     reloadReason = isClaimWaitMode ? 'Claim + Wait 20 Mins' : (timeSinceStart > effectiveClaimIntervalSeconds ? 'Time Threshold Claim' : 'Smart Claim');
                     await GM.setValue('pond0xPageReloads', pageReloads);
                     await GM.setValue('pond0xReloadReason', reloadReason);
-                    console.log(`${lh} - Reloading page after claim...`);
+                    console.log(`${lh} - Reloading page after claim in 2 seconds...`);
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // 2-second delay to ensure storage sync
                     sessionStorage.setItem('pond0xReloaded', 'true');
                     window.location.href = 'https://www.pond0x.com/mining';
                     return; // Exit to prevent rescheduling until reload completes
