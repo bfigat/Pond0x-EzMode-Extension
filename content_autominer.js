@@ -41,8 +41,8 @@
     // Utility function to sanitize DOM-derived content
     const sanitizeDomContent = (content) => {
         if (typeof content !== 'string') return '';
-        // Allow only alphanumeric, spaces, colons, and basic punctuation
-        return content.replace(/[^a-zA-Z0-9\s:.-]/g, '');
+        // Allow alphanumeric, spaces, colons, basic punctuation, decimals, and units like "h/s"
+        return content.replace(/[^a-zA-Z0-9\s:.-\/]/g, '');
     };
 
     // Utility function to sanitize user inputs
@@ -79,7 +79,16 @@
                     if (content && content !== ' ') paramName += content;
                 } else if (content && content !== ' ') paramValue += content;
             }
-            if (paramName && nameOk) params[paramName] = paramValue;
+            if (paramName && nameOk) {
+                // Special handling for hashrate to extract numeric value
+                if (paramName === 'hashrate') {
+                    // Extract numeric part, e.g., "123.45 h/s" -> "123.45"
+                    const match = paramValue.match(/(\d*\.?\d+)/);
+                    params[paramName] = match ? match[0] : '0';
+                } else {
+                    params[paramName] = paramValue;
+                }
+            }
         }
         return params;
     };
@@ -797,7 +806,7 @@
             isControlPanelReady = true;
         }
     };
-    // [Start of Part 4]
+        // [Start of Part 4]
     // Part 4 includes the mining logic functions: checkMiningStatus, startMining, run
 
     const checkMiningStatus = async () => {
@@ -909,12 +918,11 @@
     };
 
     const startMining = async () => {
-        // Removed the statusLock check since it's already handled in checkMiningStatus
         statusLock = true;
 
         // Track retries for Auto Mode
         let mineButtonRetries = 0;
-        const maxMineButtonRetries = 4; // Retry 4 times before reloading in Auto Mode
+        const maxMineButtonRetries = 4; // Retry 4 times before scheduling another status check
         const retryDelay = 2000; // 2 seconds between retries
 
         let mineBtn = searchNodeByContent('button', 'Mine');
@@ -925,17 +933,12 @@
             mineButtonRetries++;
         }
 
-        // In Auto Mode, reload after max retries if Mine button is still not found
+        // In Auto Mode, schedule another status check if Mine button is not found
         if (!mineBtn && mineButtonRetries >= maxMineButtonRetries && isAutoMode) {
-            console.warn(`${lh} - Mine button not found after ${maxMineButtonRetries} retries in Auto Mode. Reloading page...`);
-            notifyUser('Pond0x Warning', `Mine button not found after ${maxMineButtonRetries} retries. Reloading page...`);
-            pageReloads++;
-            reloadReason = 'Mine Button Not Found (Auto Mode)';
-            await GM.setValue('pond0xPageReloads', pageReloads);
-            await GM.setValue('pond0xReloadReason', reloadReason);
-            sessionStorage.setItem('pond0xReloaded', 'true'); // Mark reload
-            window.location.href = 'https://www.pond0x.com/mining';
+            console.warn(`${lh} - Mine button not found after ${maxMineButtonRetries} retries in Auto Mode. Scheduling another status check...`);
+            notifyUser('Pond0x Warning', `Mine button not found after ${maxMineButtonRetries} retries. Retrying status check...`);
             statusLock = false;
+            setTimeout(scheduleStatusCheck, 5000); // Schedule a status check in 5 seconds
             return;
         }
 
@@ -990,7 +993,17 @@
                     waitAttempts++;
                 }
 
-                const hashrate = parseFloat(getLCDParams().hashrate) || 0;
+                // Retry fetching hashrate if initially 0
+                let hashrate = parseFloat(getLCDParams().hashrate) || 0;
+                let hashrateRetries = 0;
+                const maxHashrateRetries = 5; // Retry up to 5 times
+                while (hashrate === 0 && hashrateRetries < maxHashrateRetries) {
+                    console.log(`${lh} - Hashrate is 0 (attempt ${hashrateRetries + 1}/${maxHashrateRetries}). Retrying in ${retryDelay / 1000}s...`);
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                    hashrate = parseFloat(getLCDParams().hashrate) || 0;
+                    hashrateRetries++;
+                }
+
                 const invalidUnclaimedValues = ['100k', '1m', '1.1m'];
 
                 if (hashrate > 0 && unclaimed && !invalidUnclaimedValues.includes(unclaimed)) {
@@ -1009,6 +1022,8 @@
                         await GM.setValue('pond0xAutominerStarted', true);
                     }
                     window.pond0xO.startTime = getTime();
+                    isMiningRunning = true; // Set mining state to active
+                    await GM.setValue('pond0xIsMiningRunning', true);
                 } else if (invalidUnclaimedValues.includes(unclaimed)) {
                     console.warn(`${lh} - Mining start failed: Invalid unclaimed value ${unclaimed} detected after 2 minutes`);
                     notifyUser('Pond0x Warning', `Mining start failed: Invalid unclaimed value ${unclaimed}`);
@@ -1027,10 +1042,12 @@
                 } else {
                     console.warn(`${lh} - Mining start failed: Hashrate=${hashrate}, Unclaimed=${unclaimed} (timeout after 2 minutes)`);
                     notifyUser('Pond0x Warning', `Mining start failed: Hashrate=${hashrate}, Unclaimed=${unclaimed} (timeout)`);
-                    // Reset mining state but do not reload immediately
+                    // Reset mining state and schedule another status check
                     isMiningRunning = false;
                     await GM.setValue('pond0xIsMiningRunning', false);
                     window.pond0xO.startTime = null;
+                    console.log(`${lh} - Scheduling another status check due to mining start failure...`);
+                    setTimeout(scheduleStatusCheck, 5000); // Schedule a status check in 5 seconds
                 }
             } else {
                 console.warn(`${lh} - LCD container not found after ${maxAttempts} attempts, falling back to observer...`);
@@ -1040,6 +1057,8 @@
                 isMiningRunning = false;
                 await GM.setValue('pond0xIsMiningRunning', false);
                 window.pond0xO.startTime = null;
+                console.log(`${lh} - Scheduling another status check due to LCD container not found...`);
+                setTimeout(scheduleStatusCheck, 5000); // Schedule a status check in 5 seconds
             }
         } else {
             console.warn(`${lh} - No Mine button found to start mining`);
@@ -1048,6 +1067,8 @@
             isMiningRunning = false;
             await GM.setValue('pond0xIsMiningRunning', false);
             window.pond0xO.startTime = null;
+            console.log(`${lh} - Scheduling another status check due to Mine button not found...`);
+            setTimeout(scheduleStatusCheck, 5000); // Schedule a status check in 5 seconds
         }
         statusLock = false;
     };
